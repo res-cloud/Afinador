@@ -15,10 +15,21 @@
   };
 
   // ---------- Audio compartido ----------
-  let ctx = null;
+  let ctx = null, master = null;
+  const buffers = {};
   function audio() {
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     if (ctx.state !== 'running') ctx.resume();
+    return ctx;
+  }
+  async function freshContext(rate) {
+    if (ctx) { try { await ctx.close(); } catch { /* nada */ } }
+    ctx = null; master = null;
+    for (const k of Object.keys(buffers)) delete buffers[k];
+    const AC = window.AudioContext || window.webkitAudioContext;
+    try { ctx = rate ? new AC({ sampleRate: rate, latencyHint: 'interactive' }) : new AC({ latencyHint: 'interactive' }); }
+    catch { ctx = new AC({ latencyHint: 'interactive' }); }
+    if (ctx.state !== 'running') { try { await ctx.resume(); } catch { /* nada */ } }
     return ctx;
   }
   // iOS: 'playback' suena por el altavoz e ignora el interruptor de silencio; 'play-and-record' es para el micrófono.
@@ -159,9 +170,10 @@
   let stream = null, source = null, analyser = null, chain = [], buf = null, detect = null, raf = 0, lastRun = 0, micInfo = '';
   const recent = [];   // últimas lecturas crudas (para exigir estabilidad)
   const good = [];     // lecturas estables (para mediana)
+  const pending = [];  // lecturas de una posible nueva cuerda
   let smooth = 0, lastKey = '', lastHeard = 0, displayIdx = -1;
 
-  function resetTrack() { recent.length = 0; good.length = 0; lastKey = ''; }
+  function resetTrack() { recent.length = 0; good.length = 0; pending.length = 0; lastKey = ''; }
   const cents = (a, b) => 1200 * Math.log2(a / b);
   const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
@@ -194,12 +206,15 @@
     const mf = freqToMidi(freq);
     let target, idx = -1;
     if (tuning.notes.length) { idx = chooseString(mf); target = tuning.notes[idx]; }
-    else target = Math.round(mf);
+    else {
+      const cur = Number(lastKey);
+      target = (lastKey !== '' && Math.abs(mf - cur) < 0.65) ? cur : Math.round(mf); // histéresis de nota
+    }
     displayIdx = idx;
 
     const raw = (mf - target) * 100;
     const key = String(target);
-    if (key !== lastKey || Math.abs(raw - smooth) > 40) smooth = raw; else smooth += (raw - smooth) * 0.25;
+    if (key !== lastKey || Math.abs(raw - smooth) > 40) smooth = raw; else smooth += (raw - smooth) * 0.2;
     lastKey = key;
     const c = smooth, ac = Math.abs(c);
 
@@ -218,6 +233,7 @@
         const semis = Math.round(ac / 100);
         const m = Math.round(mf);
         msg = (flat ? '▲ Sube ' : '▼ Baja ') + (semis >= 1 ? semis + (semis === 1 ? ' semitono' : ' semitonos') : 'un poco') + ' (suena ' + noteName(m) + octaveOf(m) + ')';
+        if (!flat) msg = '⚠ ' + msg + ': ¡no subas más!';
       } else msg = flat ? '▲ Sube: aprieta la clavija' : '▼ Baja: afloja la clavija';
     }
     setState(st);
@@ -241,16 +257,30 @@
       recent.push(r.freq); if (recent.length > 3) recent.shift();
       // Solo se acepta si las 3 últimas lecturas coinciden (±25 cents): ignora ruidos y golpes
       if (recent.length === 3 && Math.abs(cents(recent[0], recent[1])) < 25 && Math.abs(cents(recent[1], recent[2])) < 25) {
-        if (good.length && Math.abs(cents(r.freq, median(good))) > 80) good.length = 0; // cambió de cuerda
-        good.push(r.freq); if (good.length > 7) good.shift();
-        show(median(good));
+        let f = r.freq, held = false;
+        if (good.length) {
+          const ref = median(good);
+          // Plegar saltos de octava (armónicos) a la octava que ya se está afinando
+          for (const k of [2, 0.5, 3, 1 / 3]) if (Math.abs(cents(f / k, ref)) < 45) { f = f / k; break; }
+          if (Math.abs(cents(f, ref)) > 70) {
+            // Posible cambio de cuerda: solo se acepta si se confirma varias veces seguidas
+            pending.push(f);
+            if (pending.length >= 4 && Math.abs(cents(pending[0], pending[pending.length - 1])) < 30) { good.length = 0; good.push(...pending); pending.length = 0; }
+            else held = true;
+          } else pending.length = 0;
+        }
+        if (held) lastHeard = performance.now();
+        else {
+          if (!good.length || Math.abs(cents(f, median(good))) <= 70) { good.push(f); if (good.length > 11) good.shift(); }
+          show(median(good));
+        }
         accepted = true;
       }
     } else recent.length = 0;
 
     if (!accepted) {
       const since = performance.now() - lastHeard;
-      if (since > 3000) { if (!disp.classList.contains('idle')) idle('Toca una cuerda…'); good.length = 0; }
+      if (since > 3000) { if (!disp.classList.contains('idle')) idle('Toca una cuerda…'); good.length = 0; pending.length = 0; }
       else if (since > 250) disp.classList.add('hold');
     }
     if (showDiag) {
@@ -262,7 +292,6 @@
   async function startMic() {
     stopMetro();
     setSession('play-and-record');
-    const ac = audio();
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -278,7 +307,11 @@
       setSession('playback');
       return;
     }
-    if (ac.state !== 'running') { try { await ac.resume(); } catch { /* nada */ } }
+    // Importante en iPhone: si el contexto de audio se creó antes del micrófono, puede quedarse con otra
+    // frecuencia de muestreo (44,1 vs 48 kHz) y todas las notas se leen ~1,5 semitonos más bajas.
+    // Por eso se crea un contexto nuevo ahora, a la frecuencia real del micrófono.
+    const trackSettings = (() => { try { return stream.getAudioTracks()[0].getSettings() || {}; } catch { return {}; } })();
+    const ac = await freshContext(trackSettings.sampleRate);
     source = ac.createMediaStreamSource(stream);
     const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 70; hp.Q.value = 0.7;
     const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2000; lp.Q.value = 0.7;
@@ -288,8 +321,8 @@
     buf = new Float32Array(analyser.fftSize);
     detect = window.Pitch.createDetector(analyser.fftSize, ac.sampleRate, { minF: 30, maxF: 1500 });
     try {
-      const s = stream.getAudioTracks()[0].getSettings();
-      micInfo = (ac.sampleRate / 1000).toFixed(1) + ' kHz · AGC ' + (s.autoGainControl ? 'sí' : 'no') + ' · NS ' + (s.noiseSuppression ? 'sí' : 'no') + ' · EC ' + (s.echoCancellation ? 'sí' : 'no');
+      const s = trackSettings;
+      micInfo = 'audio ' + (ac.sampleRate / 1000).toFixed(1) + ' kHz · mic ' + (s.sampleRate ? (s.sampleRate / 1000).toFixed(1) + ' kHz' : '?') + ' · AGC ' + (s.autoGainControl ? 'sí' : 'no') + ' · NS ' + (s.noiseSuppression ? 'sí' : 'no') + ' · EC ' + (s.echoCancellation ? 'sí' : 'no');
     } catch { micInfo = (ac.sampleRate / 1000).toFixed(1) + ' kHz'; }
     resetTrack(); lastHeard = 0;
     $('micBtn').textContent = 'Pausar micrófono';
@@ -322,9 +355,8 @@
   let vol = clamp(Number(store.get('vol', 100)), 0, 100);
   let pattern = store.get('pattern', [2, 1, 1, 1]); // 2 = acento, 1 = pulso, 0 = silencio
   if (!Array.isArray(pattern) || !pattern.length || pattern.length > 12) pattern = [2, 1, 1, 1];
-  let playing = false, nextTime = 0, step = 0, timer = 0, drawRaf = 0, master = null;
+  let playing = false, nextTime = 0, step = 0, timer = 0, drawRaf = 0;
   const queue = [];
-  const buffers = {};
 
   // Sonidos limpios (sin saturación): senos con ataque suave y caída exponencial.
   // Frecuencias de 1,5–3 kHz: donde el altavoz del móvil y el oído rinden más.
