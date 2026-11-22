@@ -20,6 +20,7 @@
 <nav class="tabs" role="tablist">
   <button class="tab active" data-view="tuner" role="tab" aria-selected="true">Afinador</button>
   <button class="tab" data-view="metro" role="tab" aria-selected="false">Metrónomo</button>
+  <button class="tab" data-view="scales" role="tab" aria-selected="false">Escalas</button>
 </nav>
 
 <main>
@@ -125,9 +126,47 @@
       <button id="playBtn" class="primary">Iniciar</button>
     </div>
   </section>
+  <!-- ================= ESCALAS ================= -->
+  <section id="scales" class="view" aria-label="Escalas">
+    <div class="bar">
+      <select id="scTonic" aria-label="Tónica" class="tonic"></select>
+      <select id="scScale" aria-label="Escala"></select>
+    </div>
+
+    <div class="card">
+      <div class="cardHead"><h2 id="scTitle"></h2><button id="scPlay" class="chip" aria-label="Escuchar escala">▶ Oír</button></div>
+      <p class="muted" id="scTip"></p>
+      <div class="scNotes" id="scNotes"></div>
+      <div id="scRel" class="rel"></div>
+    </div>
+
+    <div class="card">
+      <h3>Mástil</h3>
+      <svg id="scFret" class="fret" role="img" aria-label="Escala en el mástil"></svg>
+      <p class="muted">Usa la afinación elegida en el afinador. Rojo = tónica.</p>
+    </div>
+
+    <div class="card">
+      <h3>Acordes de la tonalidad</h3>
+      <div class="chords" id="scChords"></div>
+    </div>
+
+    <div class="card">
+      <h3>Progresiones sugeridas</h3>
+      <p class="muted">Toca una para escucharla.</p>
+      <div id="scProgs"></div>
+    </div>
+
+    <div class="card">
+      <h3>Círculo de quintas</h3>
+      <svg id="scCircle" class="circle" role="img" aria-label="Círculo de quintas"></svg>
+      <p class="muted">Fuera: tonalidades mayores. Dentro: sus relativas menores. Las vecinas (resaltadas) comparten casi todas las notas: son los cambios de tono más naturales. Toca una para verla.</p>
+    </div>
+  </section>
 </main>
 <audio id="unlock" src="silence.wav" loop preload="auto" playsinline></audio>
 <script src="pitch.js"></script>
+<script src="scales.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-# Afinador y metrónomo — v5
+# Afinador, metrónomo y escalas — v6
 
 App web instalable (PWA) para el teléfono. Funciona sin conexión una vez instalada.
 
@@ -12,6 +12,8 @@ App web instalable (PWA) para el teléfono. Funciona sin conexión una vez insta
 - **Referencia La = 440 Hz** (estándar), ajustable de 415 a 466 Hz en el botón «La 440 Hz».
 - **Metrónomo**: 30–300 BPM, tap tempo, 1–12 tiempos con acento / pulso / silencio en cada uno, subdivisiones, 3 sonidos limpios (sin saturación) y volumen por el altavoz (también con el interruptor de silencio del iPhone activado).
 - Mantiene la pantalla encendida mientras se usa.
+
+- **Escalas**: elige tónica y escala (menor natural, mayor, menor armónica, pentatónicas, blues, dórica, frigia, frigia dominante, mixolidia). Muestra notas y grados, relativa mayor/menor (o escala madre en los modos), el mástil con la afinación del afinador, los acordes de la tonalidad, progresiones sugeridas para rock/metal (con su versión en power chords, se pueden escuchar) y un círculo de quintas táctil.
 
 ## Privacidad y seguridad
 - Sin cuentas, sin anuncios, sin analítica, sin librerías externas. Cero peticiones a terceros.

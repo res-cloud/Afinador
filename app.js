@@ -505,6 +505,40 @@
 
   setBpm(bpm); setVol(vol); renderBeats();
   renderStrings();
+
+  // ================= ESCALAS =================
+  function tone(ac, f, t, dur, vol) {
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    g.connect(ac.destination);
+    [[1, 1], [2, 0.45], [3, 0.25], [4, 0.1]].forEach(([h, a]) => {
+      const o = ac.createOscillator(), og = ac.createGain();
+      o.frequency.value = f * h; og.gain.value = a; o.connect(og).connect(g); o.start(t); o.stop(t + dur + 0.05);
+    });
+  }
+  const pcFreq = (midi) => 440 * Math.pow(2, (midi - 69) / 12); // escalas siempre a 440
+  const scalesUI = window.Escalas.init({
+    store,
+    getStrings: () => (tuning.notes.length ? tuning.notes : [40, 45, 50, 55, 59, 64]),
+    play: (midis) => { setSession('playback'); const ac = audio(); let t = ac.currentTime + 0.05; for (const m of midis) { tone(ac, pcFreq(m), t, 0.9, 0.3); t += 0.32; } },
+    playChords: (chords) => {
+      setSession('playback'); const ac = audio(); let t = ac.currentTime + 0.05;
+      for (const pcs of chords) { for (const pc of pcs) tone(ac, pcFreq(48 + pc), t, 1.1, 0.12); tone(ac, pcFreq(36 + (pcs[0] % 12)), t, 1.1, 0.14); t += 0.9; }
+    },
+  });
+  $('scPlay').addEventListener('click', () => {
+    const notes = [...document.querySelectorAll('#scNotes .scNote b')].map(b => b.textContent);
+    const PCS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+    const pcOf = (n) => (PCS[n[0]] + (n.includes('♯') ? 1 : 0) - (n.includes('♭') ? 1 : 0) + (n.includes('𝄪') ? 2 : 0) - (n.includes('𝄫') ? 2 : 0) + 12) % 12;
+    const root = pcOf(notes[0]); const ms = notes.map(n => { const pc = pcOf(n); return 48 + root + ((pc - root + 12) % 12); });
+    ms.push(60 + root);
+    if (stream) stopMic();
+    const ac = audio(); let t = ac.currentTime + 0.05; setSession('playback');
+    for (const m of ms) { tone(ac, pcFreq(m), t, 0.5, 0.3); t += 0.28; }
+  });
+  tuningSel.addEventListener('change', () => scalesUI.refresh());
   idle('Toca «Empezar a afinar»');
 
   // Si el permiso del micrófono ya está concedido, empezar a escuchar directamente
