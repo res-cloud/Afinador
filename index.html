@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; manifest-src 'self'; connect-src 'self'; worker-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0d0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Afinador">
+<title>Afinador</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-view="tuner" role="tab" aria-selected="true">Afinador</button>
+    <button class="tab" data-view="metro" role="tab" aria-selected="false">Metrónomo</button>
+  </nav>
+</header>
+
+<main>
+  <!-- AFINADOR -->
+  <section id="tuner" class="view active" aria-label="Afinador">
+    <div class="meter">
+      <div class="note-wrap">
+        <span id="note" class="note">–</span><span id="octave" class="octave"></span>
+      </div>
+      <div class="gauge" aria-hidden="true">
+        <div class="scale">
+          <span>-50</span><span>-25</span><span class="zero">0</span><span>+25</span><span>+50</span>
+        </div>
+        <div class="track"><div class="center"></div><div id="needle" class="needle"></div></div>
+      </div>
+      <div class="readout">
+        <span id="cents">— ¢</span>
+        <span id="freq">— Hz</span>
+      </div>
+      <div id="hint" class="hint">Toca «Activar micrófono» para empezar</div>
+    </div>
+
+    <div class="strings" id="strings" aria-label="Cuerdas"></div>
+
+    <div class="controls">
+      <label class="field">Afinación
+        <select id="tuning"></select>
+      </label>
+      <label class="field small">La (A4)
+        <span class="stepper">
+          <button id="a4down" aria-label="Bajar A4">−</button>
+          <output id="a4">440</output>
+          <button id="a4up" aria-label="Subir A4">+</button>
+        </span>
+      </label>
+    </div>
+
+    <button id="micBtn" class="primary">Activar micrófono</button>
+    <p class="privacy">El sonido se analiza solo en tu teléfono. Nada se graba ni se envía.</p>
+  </section>
+
+  <!-- METRÓNOMO -->
+  <section id="metro" class="view" aria-label="Metrónomo">
+    <div class="beats" id="beats"></div>
+    <div class="bpm-wrap">
+      <button id="bpmDown" class="round" aria-label="Bajar tempo">−</button>
+      <div class="bpm"><output id="bpm">120</output><small>BPM</small></div>
+      <button id="bpmUp" class="round" aria-label="Subir tempo">+</button>
+    </div>
+    <input id="bpmRange" type="range" min="30" max="300" value="120" aria-label="Tempo">
+    <div class="controls">
+      <label class="field small">Compás
+        <select id="meterSel">
+          <option value="2">2/4</option>
+          <option value="3">3/4</option>
+          <option value="4" selected>4/4</option>
+          <option value="5">5/4</option>
+          <option value="6">6/8</option>
+          <option value="7">7/8</option>
+          <option value="1">Sin acento</option>
+        </select>
+      </label>
+      <label class="field small">Subdivisión
+        <select id="subdiv">
+          <option value="1" selected>Negras</option>
+          <option value="2">Corcheas</option>
+          <option value="3">Tresillos</option>
+          <option value="4">Semicorcheas</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <button id="tapBtn" class="secondary">Tap</button>
+      <button id="playBtn" class="primary">Iniciar</button>
+    </div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
