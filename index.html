@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; manifest-src 'self'; connect-src 'self'; worker-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<meta name="theme-color" content="#0d0d10">
+<meta name="theme-color" content="#0b0b0e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -17,88 +17,114 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header class="top">
-  <nav class="tabs" role="tablist">
-    <button class="tab active" data-view="tuner" role="tab" aria-selected="true">Afinador</button>
-    <button class="tab" data-view="metro" role="tab" aria-selected="false">Metrónomo</button>
-  </nav>
-</header>
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-view="tuner" role="tab" aria-selected="true">Afinador</button>
+  <button class="tab" data-view="metro" role="tab" aria-selected="false">Metrónomo</button>
+</nav>
 
 <main>
-  <!-- AFINADOR -->
+  <!-- ================= AFINADOR ================= -->
   <section id="tuner" class="view active" aria-label="Afinador">
-    <div class="meter">
-      <div class="note-wrap">
-        <span id="note" class="note">–</span><span id="octave" class="octave"></span>
-      </div>
-      <div class="gauge" aria-hidden="true">
-        <div class="scale">
-          <span>-50</span><span>-25</span><span class="zero">0</span><span>+25</span><span>+50</span>
+    <div class="bar">
+      <select id="tuning" aria-label="Afinación"></select>
+      <button id="calBtn" class="chip" aria-label="Calibración">La <b id="a4label">440</b> Hz</button>
+    </div>
+
+    <div class="display" id="display">
+      <div class="dir">
+        <div class="arrow flat" id="arrowFlat"><span class="tri">▲</span><span>SUBE</span></div>
+        <div class="noteBox">
+          <div class="note"><span id="note">–</span><sub id="octave"></sub></div>
+          <div class="target" id="target">Afinación automática</div>
         </div>
-        <div class="track"><div class="center"></div><div id="needle" class="needle"></div></div>
+        <div class="arrow sharp" id="arrowSharp"><span class="tri">▼</span><span>BAJA</span></div>
       </div>
-      <div class="readout">
-        <span id="cents">— ¢</span>
-        <span id="freq">— Hz</span>
+
+      <div class="gauge" aria-hidden="true">
+        <div class="ticks" id="ticks"></div>
+        <div class="needle" id="needle"></div>
+        <div class="labels"><span>♭ −50</span><span>0</span><span>+50 ♯</span></div>
       </div>
-      <div id="hint" class="hint">Toca «Activar micrófono» para empezar</div>
+
+      <div class="status" id="status">Activa el micrófono para empezar</div>
+      <div class="readout"><span id="cents">— ¢</span><span id="freq">— Hz</span></div>
+      <div class="level" aria-hidden="true"><div id="level"></div></div>
     </div>
 
     <div class="strings" id="strings" aria-label="Cuerdas"></div>
+    <p class="tip" id="stringTip">Toca una cuerda para fijarla. Tócala otra vez para volver a automático. Mantén pulsado para escuchar la nota.</p>
 
-    <div class="controls">
-      <label class="field">Afinación
-        <select id="tuning"></select>
-      </label>
-      <label class="field small">La (A4)
-        <span class="stepper">
-          <button id="a4down" aria-label="Bajar A4">−</button>
-          <output id="a4">440</output>
-          <button id="a4up" aria-label="Subir A4">+</button>
-        </span>
-      </label>
-    </div>
+    <button id="micBtn" class="primary big">Activar micrófono</button>
 
-    <button id="micBtn" class="primary">Activar micrófono</button>
-    <p class="privacy">El sonido se analiza solo en tu teléfono. Nada se graba ni se envía.</p>
+    <dialog id="calDlg">
+      <div class="dlg">
+        <h3>Ajustes del afinador</h3>
+        <p class="muted">La referencia es la frecuencia del La central (A4). El estándar es <b>440 Hz</b>; déjalo así salvo que tu banda afine a otra referencia.</p>
+        <div class="stepper">
+          <button type="button" id="a4down" aria-label="Bajar">−</button>
+          <output id="a4">440 Hz</output>
+          <button type="button" id="a4up" aria-label="Subir">+</button>
+        </div>
+        <button type="button" id="a4reset" class="link">Volver a 440 Hz</button>
+        <h4>Sensibilidad</h4>
+        <div class="seg" id="sensSeg">
+          <button type="button" data-v="normal">Normal</button>
+          <button type="button" data-v="alta">Alta</button>
+          <button type="button" data-v="max">Máxima</button>
+        </div>
+        <p class="muted">Usa Alta o Máxima para afinar la guitarra eléctrica sin enchufar.</p>
+        <button type="button" id="calClose" class="primary">Listo</button>
+      </div>
+    </dialog>
   </section>
 
-  <!-- METRÓNOMO -->
+  <!-- ================= METRÓNOMO ================= -->
   <section id="metro" class="view" aria-label="Metrónomo">
     <div class="beats" id="beats"></div>
+    <p class="tip">Toca cada tiempo para cambiarlo: <b class="k acc">acento</b> → <b class="k">pulso</b> → <b class="k mute">silencio</b></p>
+
     <div class="bpm-wrap">
       <button id="bpmDown" class="round" aria-label="Bajar tempo">−</button>
-      <div class="bpm"><output id="bpm">120</output><small>BPM</small></div>
+      <div class="bpm"><output id="bpm">120</output><small id="tempoName">BPM</small></div>
       <button id="bpmUp" class="round" aria-label="Subir tempo">+</button>
     </div>
     <input id="bpmRange" type="range" min="30" max="300" value="120" aria-label="Tempo">
-    <div class="controls">
-      <label class="field small">Compás
-        <select id="meterSel">
-          <option value="2">2/4</option>
-          <option value="3">3/4</option>
-          <option value="4" selected>4/4</option>
-          <option value="5">5/4</option>
-          <option value="6">6/8</option>
-          <option value="7">7/8</option>
-          <option value="1">Sin acento</option>
-        </select>
+
+    <div class="grid">
+      <label>Tiempos
+        <span class="stepper sm">
+          <button id="beatsDown" aria-label="Menos tiempos">−</button>
+          <output id="beatsOut">4</output>
+          <button id="beatsUp" aria-label="Más tiempos">+</button>
+        </span>
       </label>
-      <label class="field small">Subdivisión
+      <label>Subdivisión
         <select id="subdiv">
-          <option value="1" selected>Negras</option>
-          <option value="2">Corcheas</option>
+          <option value="1">♩ Negras</option>
+          <option value="2">♪♪ Corcheas</option>
           <option value="3">Tresillos</option>
           <option value="4">Semicorcheas</option>
         </select>
       </label>
+      <label>Sonido
+        <select id="sound">
+          <option value="beep">Beep</option>
+          <option value="clic">Clic</option>
+          <option value="madera">Madera</option>
+        </select>
+      </label>
+      <label>Volumen
+        <input id="vol" type="range" min="0" max="100" value="100" aria-label="Volumen">
+      </label>
     </div>
+
     <div class="row">
       <button id="tapBtn" class="secondary">Tap</button>
       <button id="playBtn" class="primary">Iniciar</button>
     </div>
   </section>
 </main>
+<audio id="unlock" src="silence.wav" loop preload="auto" playsinline></audio>
 <script src="app.js"></script>
 </body>
 </html>

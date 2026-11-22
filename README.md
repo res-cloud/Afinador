@@ -1,13 +1,14 @@
-# Afinador y metrónomo — v1
+# Afinador y metrónomo — v2
 
 App web instalable (PWA) para el teléfono. Funciona sin conexión una vez instalada.
 
 ## Qué hace
-- **Afinador cromático**: nota, octava, desviación en cents (±50), frecuencia en Hz. Verde = afinada (±3 ¢).
+- **Afinador**: nota objetivo grande, aguja de ±50 cents y flechas **SUBE / BAJA**. Rojo = lejos, ámbar = cerca, verde = afinada (±3 ¢). Si la cuerda está a semitonos de distancia, lo indica («SUBE 2 semitonos · suena D2»).
+- Detecta la cuerda automáticamente o puedes fijarla tocándola en pantalla. Mantén pulsada una cuerda para oír su nota.
+- **Sensibilidad** Normal / Alta / Máxima: Alta (por defecto) permite afinar la eléctrica sin enchufar. Filtro de ruido y corrección de octava para cuerdas graves.
 - **Afinaciones**: Estándar, Drop D, E♭, Drop C♯, D estándar, Drop C, C estándar, Drop B, 7 cuerdas (B, Drop A, A estándar), bajo 4 cuerdas (E y Drop D). Detecta desde ~35 Hz.
-- Toca una cuerda en pantalla para oír su **nota de referencia**.
-- **La (A4)** ajustable de 415 a 466 Hz.
-- **Metrónomo**: 30–300 BPM, tap tempo, compases 2/4–7/8, subdivisiones (corcheas, tresillos, semicorcheas), acento en el 1.
+- **Referencia La = 440 Hz** (estándar), ajustable de 415 a 466 Hz en el botón «La 440 Hz».
+- **Metrónomo**: 30–300 BPM, tap tempo, 1–12 tiempos con acento / pulso / silencio en cada uno, subdivisiones, 3 sonidos y volumen al máximo por el altavoz (también con el interruptor de silencio del iPhone activado).
 - Mantiene la pantalla encendida mientras se usa.
 
 ## Privacidad y seguridad
