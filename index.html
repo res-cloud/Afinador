@@ -27,52 +27,54 @@
   <section id="tuner" class="view active" aria-label="Afinador">
     <div class="bar">
       <select id="tuning" aria-label="Afinación"></select>
-      <button id="calBtn" class="chip" aria-label="Calibración">La <b id="a4label">440</b> Hz</button>
+      <button id="calBtn" class="chip icon" aria-label="Ajustes">⚙</button>
     </div>
 
-    <div class="display" id="display">
+    <div class="display idle" id="display">
       <div class="dir">
-        <div class="arrow flat" id="arrowFlat"><span class="tri">▲</span><span>SUBE</span></div>
+        <div class="arrow flat"><span class="tri">▲</span><span>SUBE</span></div>
         <div class="noteBox">
           <div class="note"><span id="note">–</span><sub id="octave"></sub></div>
-          <div class="target" id="target">Afinación automática</div>
+          <div class="target" id="target"></div>
         </div>
-        <div class="arrow sharp" id="arrowSharp"><span class="tri">▼</span><span>BAJA</span></div>
+        <div class="arrow sharp"><span class="tri">▼</span><span>BAJA</span></div>
       </div>
 
       <div class="gauge" aria-hidden="true">
         <div class="ticks" id="ticks"></div>
         <div class="needle" id="needle"></div>
-        <div class="labels"><span>♭ −50</span><span>0</span><span>+50 ♯</span></div>
+        <div class="labels"><span>−50</span><span>0</span><span>+50</span></div>
       </div>
 
-      <div class="status" id="status">Activa el micrófono para empezar</div>
-      <div class="readout"><span id="cents">— ¢</span><span id="freq">— Hz</span></div>
+      <div class="status" id="status">Toca «Empezar a afinar»</div>
+      <div class="cents" id="cents"></div>
       <div class="level" aria-hidden="true"><div id="level"></div></div>
+      <div class="diag" id="diag" hidden></div>
     </div>
 
     <div class="strings" id="strings" aria-label="Cuerdas"></div>
-    <p class="tip" id="stringTip">Toca una cuerda para fijarla. Tócala otra vez para volver a automático. Mantén pulsado para escuchar la nota.</p>
+    <p class="tip" id="stringTip">Toca una cuerda para fijarla · mantén pulsado para oírla</p>
 
-    <button id="micBtn" class="primary big">Activar micrófono</button>
+    <button id="micBtn" class="primary big">Empezar a afinar</button>
 
     <dialog id="calDlg">
       <div class="dlg">
-        <h3>Ajustes del afinador</h3>
-        <p class="muted">La referencia es la frecuencia del La central (A4). El estándar es <b>440 Hz</b>; déjalo así salvo que tu banda afine a otra referencia.</p>
-        <div class="stepper">
-          <button type="button" id="a4down" aria-label="Bajar">−</button>
-          <output id="a4">440 Hz</output>
-          <button type="button" id="a4up" aria-label="Subir">+</button>
-        </div>
-        <button type="button" id="a4reset" class="link">Volver a 440 Hz</button>
+        <h3>Ajustes</h3>
         <h4>Sensibilidad</h4>
         <div class="seg" id="sensSeg">
           <button type="button" data-v="normal">Normal</button>
           <button type="button" data-v="alta">Alta</button>
           <button type="button" data-v="max">Máxima</button>
         </div>
-        <p class="muted">Usa Alta o Máxima para afinar la guitarra eléctrica sin enchufar.</p>
+        <p class="muted">Alta: guitarra eléctrica sin enchufar con el teléfono cerca. Normal: ignora más el ruido. Máxima: lugares muy silenciosos.</p>
+        <h4>Referencia del La (A4)</h4>
+        <div class="stepper">
+          <button type="button" id="a4down" aria-label="Bajar">−</button>
+          <output id="a4">440 Hz</output>
+          <button type="button" id="a4up" aria-label="Subir">+</button>
+        </div>
+        <p class="muted">El estándar es 440 Hz. Cámbialo solo si tu banda afina a otra referencia. <button type="button" id="a4reset" class="link">Volver a 440</button></p>
+        <label class="check"><input type="checkbox" id="diagChk"> Mostrar diagnóstico</label>
         <button type="button" id="calClose" class="primary">Listo</button>
       </div>
     </dialog>
@@ -125,6 +127,7 @@
   </section>
 </main>
 <audio id="unlock" src="silence.wav" loop preload="auto" playsinline></audio>
+<script src="pitch.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

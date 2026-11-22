@@ -1,4 +1,4 @@
-/* Afinador cromático + metrónomo — v2
+/* Afinador cromático + metrónomo — v3
  * Todo corre en el dispositivo: sin red, sin cuentas, sin analítica.
  * El audio del micrófono se analiza en memoria y se descarta; nunca se graba.
  */
@@ -21,11 +21,9 @@
     if (ctx.state !== 'running') ctx.resume();
     return ctx;
   }
-  // iOS: 'playback' suena por el altavoz a todo volumen e ignora el interruptor de silencio;
-  // 'play-and-record' es necesario para el micrófono.
+  // iOS: 'playback' suena por el altavoz e ignora el interruptor de silencio; 'play-and-record' es para el micrófono.
   function setSession(type) { try { if (navigator.audioSession) navigator.audioSession.type = type; } catch { /* no soportado */ } }
 
-  // Mantener la pantalla encendida
   let wakeLock = null;
   async function keepAwake(on) {
     try {
@@ -45,28 +43,36 @@
   const octaveOf = (m) => Math.floor(m / 12) - 1;
 
   const TUNINGS = [
-    { id: 'chromatic', name: 'Cromático', notes: [] },
-    { id: 'e',      name: 'Estándar · E A D G B E',        notes: [40, 45, 50, 55, 59, 64] },
-    { id: 'dropd',  name: 'Drop D · D A D G B E',          notes: [38, 45, 50, 55, 59, 64] },
-    { id: 'eb',     name: 'E♭ · medio tono abajo',          notes: [39, 44, 49, 54, 58, 63] },
-    { id: 'dropcs', name: 'Drop C♯ · C♯ G♯ C♯ F♯ A♯ D♯',   notes: [37, 44, 49, 54, 58, 63] },
-    { id: 'd',      name: 'D estándar · D G C F A D',      notes: [38, 43, 48, 53, 57, 62] },
-    { id: 'dropc',  name: 'Drop C · C G C F A D',          notes: [36, 43, 48, 53, 57, 62] },
-    { id: 'c',      name: 'C estándar · C F A♯ D♯ G C',    notes: [36, 41, 46, 51, 55, 60] },
-    { id: 'dropb',  name: 'Drop B · B F♯ B E G♯ C♯',       notes: [35, 42, 47, 52, 56, 61] },
-    { id: '7b',     name: '7 cuerdas · B E A D G B E',     notes: [35, 40, 45, 50, 55, 59, 64] },
-    { id: '7a',     name: '7 cuerdas Drop A · A E A D G B E', notes: [33, 40, 45, 50, 55, 59, 64] },
-    { id: '7as',    name: '7 cuerdas A · A D G C F A D',   notes: [33, 38, 43, 48, 53, 57, 62] },
-    { id: 'bass',   name: 'Bajo · E A D G',                notes: [28, 33, 38, 43] },
-    { id: 'bassd',  name: 'Bajo Drop D · D A D G',         notes: [26, 33, 38, 43] },
+    { id: 'e',      group: '',                 name: 'Estándar (E A D G B E)',        notes: [40, 45, 50, 55, 59, 64] },
+    { id: 'dropd',  group: 'Variaciones',      name: 'Drop D (D A D G B E)',          notes: [38, 45, 50, 55, 59, 64] },
+    { id: 'eb',     group: 'Variaciones',      name: 'E♭ (medio tono abajo)',          notes: [39, 44, 49, 54, 58, 63] },
+    { id: 'dropcs', group: 'Variaciones',      name: 'Drop C♯ (C♯ G♯ C♯ F♯ A♯ D♯)',   notes: [37, 44, 49, 54, 58, 63] },
+    { id: 'd',      group: 'Variaciones',      name: 'D estándar (D G C F A D)',      notes: [38, 43, 48, 53, 57, 62] },
+    { id: 'dropc',  group: 'Variaciones',      name: 'Drop C (C G C F A D)',          notes: [36, 43, 48, 53, 57, 62] },
+    { id: 'c',      group: 'Variaciones',      name: 'C estándar (C F A♯ D♯ G C)',    notes: [36, 41, 46, 51, 55, 60] },
+    { id: 'dropb',  group: 'Variaciones',      name: 'Drop B (B F♯ B E G♯ C♯)',       notes: [35, 42, 47, 52, 56, 61] },
+    { id: '7b',     group: '7 cuerdas',        name: '7 cuerdas (B E A D G B E)',     notes: [35, 40, 45, 50, 55, 59, 64] },
+    { id: '7a',     group: '7 cuerdas',        name: '7 cuerdas Drop A',              notes: [33, 40, 45, 50, 55, 59, 64] },
+    { id: '7as',    group: '7 cuerdas',        name: '7 cuerdas A (A D G C F A D)',   notes: [33, 38, 43, 48, 53, 57, 62] },
+    { id: 'bass',   group: 'Bajo',             name: 'Bajo (E A D G)',                notes: [28, 33, 38, 43] },
+    { id: 'bassd',  group: 'Bajo',             name: 'Bajo Drop D (D A D G)',         notes: [26, 33, 38, 43] },
+    { id: 'chromatic', group: 'Libre',         name: 'Cromático (cualquier nota)',    notes: [] },
   ];
 
   const tuningSel = $('tuning');
-  for (const t of TUNINGS) { const o = document.createElement('option'); o.value = t.id; o.textContent = t.name; tuningSel.appendChild(o); }
+  {
+    const groups = {};
+    for (const t of TUNINGS) {
+      const o = document.createElement('option'); o.value = t.id; o.textContent = t.name;
+      if (!t.group) { tuningSel.appendChild(o); continue; }
+      if (!groups[t.group]) { groups[t.group] = document.createElement('optgroup'); groups[t.group].label = t.group; tuningSel.appendChild(groups[t.group]); }
+      groups[t.group].appendChild(o);
+    }
+  }
   const savedT = store.get('tuning', 'e');
   tuningSel.value = TUNINGS.some(t => t.id === savedT) ? savedT : 'e';
   let tuning = TUNINGS.find(t => t.id === tuningSel.value);
-  let locked = -1; // índice de cuerda fijada, -1 = automático
+  let locked = -1; // cuerda fijada; -1 = automático
 
   function renderStrings() {
     const box = $('strings');
@@ -78,20 +84,21 @@
       const n = document.createElement('span'); n.textContent = noteName(m);
       const s = document.createElement('small'); s.textContent = (tuning.notes.length - i) + 'ª';
       b.append(n, s);
-      // Toque corto: fijar/soltar cuerda. Pulsación larga: escuchar nota.
       let t = 0, long = false;
       b.addEventListener('pointerdown', () => { long = false; t = setTimeout(() => { long = true; playReference(m); }, 450); });
       ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, () => clearTimeout(t)));
-      b.addEventListener('click', () => { if (long) return; locked = locked === i ? -1 : i; updateTargetLabel(); markStrings(-1, false); });
+      b.addEventListener('click', () => { if (long) return; locked = locked === i ? -1 : i; resetTrack(); markStrings(-1, false); showTarget(locked); });
       b.addEventListener('contextmenu', (e) => e.preventDefault());
       box.appendChild(b);
     });
-    updateTargetLabel();
+    markStrings(-1, false);
+    showTarget(locked);
   }
-  function updateTargetLabel() {
-    if (!tuning.notes.length) $('target').textContent = 'Modo cromático';
-    else if (locked >= 0) $('target').textContent = 'Cuerda ' + (tuning.notes.length - locked) + 'ª fijada';
-    else $('target').textContent = 'Detección automática de cuerda';
+  function showTarget(idx) {
+    if (!tuning.notes.length) { $('target').textContent = 'Modo cromático'; return; }
+    if (idx < 0) { $('target').textContent = 'Toca cualquier cuerda'; return; }
+    const m = tuning.notes[idx];
+    $('target').textContent = (tuning.notes.length - idx) + 'ª cuerda · ' + midiToFreq(m).toFixed(1) + ' Hz' + (idx === locked ? ' · fijada' : '');
   }
   function markStrings(idx, ok) {
     const kids = $('strings').children;
@@ -103,11 +110,9 @@
   }
   tuningSel.addEventListener('change', () => {
     tuning = TUNINGS.find(t => t.id === tuningSel.value);
-    locked = -1; store.set('tuning', tuning.id); renderStrings();
+    locked = -1; store.set('tuning', tuning.id); resetTrack(); renderStrings();
   });
-  renderStrings();
 
-  // Marcas del medidor (-50…+50 cents, cada 5)
   (() => {
     const t = $('ticks');
     for (let c = -50; c <= 50; c += 5) {
@@ -117,16 +122,20 @@
     }
   })();
 
-  // ---------- Ajustes (A4 y sensibilidad) ----------
-  const SENS = { normal: { gate: 0.004, th: 0.12 }, alta: { gate: 0.0005, th: 0.15 }, max: { gate: 0.0002, th: 0.18 } };
+  // ---------- Ajustes ----------
+  // clarity: cuán periódica debe ser la señal (1 = tono puro). Más bajo = más sensible.
+  const SENS = { normal: 0.7, alta: 0.55, max: 0.45 };
   let sens = SENS[store.get('sens', 'alta')] ? store.get('sens', 'alta') : 'alta';
-  function setA4(v) { a4 = clamp(v, 415, 466); $('a4').textContent = a4 + ' Hz'; $('a4label').textContent = String(a4); store.set('a4', a4); }
+  let showDiag = !!store.get('diag', false);
+  function setA4(v) { a4 = clamp(v, 415, 466); $('a4').textContent = a4 + ' Hz'; store.set('a4', a4); showTarget(locked); }
   function setSens(v) { sens = v; store.set('sens', v); for (const b of $('sensSeg').children) b.classList.toggle('on', b.dataset.v === v); }
-  setA4(a4); setSens(sens);
+  function setDiag(v) { showDiag = v; store.set('diag', v); $('diagChk').checked = v; $('diag').hidden = !v; }
+  setA4(a4); setSens(sens); setDiag(showDiag);
   $('a4down').addEventListener('click', () => setA4(a4 - 1));
   $('a4up').addEventListener('click', () => setA4(a4 + 1));
   $('a4reset').addEventListener('click', () => setA4(440));
   for (const b of $('sensSeg').children) b.addEventListener('click', () => setSens(b.dataset.v));
+  $('diagChk').addEventListener('change', (e) => setDiag(e.target.checked));
   $('calBtn').addEventListener('click', () => $('calDlg').showModal());
   $('calClose').addEventListener('click', () => $('calDlg').close());
 
@@ -146,49 +155,14 @@
     });
   }
 
-  // ---------- Detección de tono (YIN con corrección de octava) ----------
-  const MIN_F = 35, MAX_F = 1400;
-  let stream = null, analyser = null, source = null, chain = [], buf = null, yinBuf = null, raf = 0, lastRun = 0;
-  const hist = [];
-  let smooth = 0, lastKey = '', lastHeard = 0, noiseFloor = 0.001;
+  // ---------- Detección ----------
+  let stream = null, source = null, analyser = null, chain = [], buf = null, detect = null, raf = 0, lastRun = 0, micInfo = '';
+  const recent = [];   // últimas lecturas crudas (para exigir estabilidad)
+  const good = [];     // lecturas estables (para mediana)
+  let smooth = 0, lastKey = '', lastHeard = 0, displayIdx = -1;
 
-  function yin(x, sr, th) {
-    const W = x.length >> 1;
-    const tauMin = Math.max(2, Math.floor(sr / MAX_F));
-    const tauMax = Math.min(W - 1, Math.ceil(sr / MIN_F));
-    const d = yinBuf;
-    d[0] = 1;
-    let run = 0;
-    for (let tau = 1; tau <= tauMax; tau++) {
-      let s = 0;
-      for (let j = 0; j < W; j++) { const v = x[j] - x[j + tau]; s += v * v; }
-      run += s;
-      d[tau] = run > 0 ? s * tau / run : 1;
-    }
-    const localMin = (t) => { while (t + 1 <= tauMax && d[t + 1] < d[t]) t++; return t; };
-    let tau = -1;
-    for (let t = tauMin; t <= tauMax; t++) if (d[t] < th) { tau = localMin(t); break; }
-    if (tau < 0) {
-      let best = tauMin;
-      for (let t = tauMin; t <= tauMax; t++) if (d[t] < d[best]) best = t;
-      if (d[best] > 0.3) return -1;
-      tau = best;
-    }
-    // Corrección de octava: cuerdas graves sin amplificar tienen la fundamental débil
-    for (let k = 0; k < 2; k++) {
-      const t2 = tau * 2;
-      if (t2 + 2 > tauMax) break;
-      let m = t2 - 2; for (let t = t2 - 2; t <= t2 + 2; t++) if (d[t] < d[m]) m = t;
-      m = localMin(m);
-      if (d[m] < d[tau] * 0.55) tau = m; else break;
-    }
-    let bt = tau;
-    if (tau > 1 && tau < tauMax) {
-      const a = d[tau - 1], b = d[tau], c = d[tau + 1], den = a + c - 2 * b;
-      if (den > 0) bt = tau + (a - c) / (2 * den);
-    }
-    return sr / bt;
-  }
+  function resetTrack() { recent.length = 0; good.length = 0; lastKey = ''; }
+  const cents = (a, b) => 1200 * Math.log2(a / b);
   const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
   const disp = $('display');
@@ -197,76 +171,91 @@
   function idle(msg) {
     setState('idle');
     $('note').textContent = '–'; $('octave').textContent = '';
-    $('cents').textContent = '— ¢'; $('freq').textContent = '— Hz';
+    $('cents').textContent = '';
     $('needle').style.left = '50%';
     $('status').textContent = msg;
-    markStrings(-1, false);
+    displayIdx = -1;
+    markStrings(-1, false); showTarget(locked);
+  }
+
+  function chooseString(mf) {
+    if (locked >= 0) return locked;
+    let idx = 0, best = Infinity;
+    tuning.notes.forEach((m, i) => {
+      // Histéresis: la cuerda que ya se muestra tiene preferencia (evita saltos)
+      const dd = Math.abs(mf - m) - (i === displayIdx ? 0.6 : 0);
+      if (dd < best) { best = dd; idx = i; }
+    });
+    return idx;
   }
 
   function show(freq) {
     lastHeard = performance.now();
     const mf = freqToMidi(freq);
     let target, idx = -1;
-    if (tuning.notes.length) {
-      if (locked >= 0) idx = locked;
-      else { let best = Infinity; tuning.notes.forEach((m, i) => { const dd = Math.abs(mf - m); if (dd < best) { best = dd; idx = i; } }); }
-      target = tuning.notes[idx];
-    } else target = Math.round(mf);
+    if (tuning.notes.length) { idx = chooseString(mf); target = tuning.notes[idx]; }
+    else target = Math.round(mf);
+    displayIdx = idx;
 
     const raw = (mf - target) * 100;
-    const key = target + '|' + idx;
-    if (key !== lastKey || Math.abs(raw - smooth) > 60) smooth = raw; else smooth += (raw - smooth) * 0.3;
+    const key = String(target);
+    if (key !== lastKey || Math.abs(raw - smooth) > 40) smooth = raw; else smooth += (raw - smooth) * 0.25;
     lastKey = key;
     const c = smooth, ac = Math.abs(c);
 
     $('note').textContent = noteName(target);
     $('octave').textContent = String(octaveOf(target));
-    const cr = Math.round(c) || 0;
-    $('cents').textContent = (cr > 0 ? '+' : '') + cr + ' ¢';
-    $('freq').textContent = freq.toFixed(1) + ' Hz · ' + midiToFreq(target).toFixed(1) + ' Hz';
+    const cr = Math.round(c * 10) / 10 || 0;
+    $('cents').textContent = (cr > 0 ? '+' : '') + cr.toFixed(1) + ' cents · ' + freq.toFixed(2) + ' Hz';
     $('needle').style.left = (50 + clamp(c, -50, 50)) + '%';
 
     let st, msg;
-    if (ac <= 3) { st = 'ok'; msg = '✓ AFINADA'; }
+    if (ac <= 2) { st = 'ok'; msg = '✓ Afinada'; }
     else {
-      const dirFlat = c < 0;
-      st = (ac <= 10 ? 'near ' : '') + (dirFlat ? 'flat' : 'sharp');
-      if (ac >= 50) {
+      const flat = c < 0;
+      st = (ac <= 8 ? 'near ' : '') + (flat ? 'flat' : 'sharp');
+      if (ac >= 60) {
         const semis = Math.round(ac / 100);
-        const tocas = noteName(Math.round(mf)) + octaveOf(Math.round(mf));
-        msg = (dirFlat ? '▲ SUBE ' : '▼ BAJA ') + (semis >= 1 ? semis + (semis === 1 ? ' semitono' : ' semitonos') : '') + ' · suena ' + tocas;
-      } else msg = dirFlat ? '▲ SUBE · aprieta' : '▼ BAJA · afloja';
+        const m = Math.round(mf);
+        msg = (flat ? '▲ Sube ' : '▼ Baja ') + (semis >= 1 ? semis + (semis === 1 ? ' semitono' : ' semitonos') : 'un poco') + ' (suena ' + noteName(m) + octaveOf(m) + ')';
+      } else msg = flat ? '▲ Sube: aprieta la clavija' : '▼ Baja: afloja la clavija';
     }
     setState(st);
     $('status').textContent = msg;
     markStrings(idx, st === 'ok');
+    showTarget(idx);
   }
 
   function loop(ts) {
     raf = requestAnimationFrame(loop);
-    if (ts - lastRun < 40) return; // ~25 análisis/segundo
+    if (ts - lastRun < 30) return;
     lastRun = ts;
     analyser.getFloatTimeDomainData(buf);
-    let rms = 0;
-    for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
-    rms = Math.sqrt(rms / buf.length);
-    const db = 20 * Math.log10(rms + 1e-9);
-    $('level').style.width = clamp((db + 80) / 70 * 100, 0, 100) + '%';
+    const r = detect(buf);
+    const db = 20 * Math.log10(r.rms + 1e-9);
+    $('level').style.width = clamp((db + 90) / 70 * 100, 0, 100) + '%';
 
-    const cfg = SENS[sens];
-    const gate = Math.max(cfg.gate, noiseFloor * 2.2);
-    let f = -1;
-    if (rms > gate) f = yin(buf, ctx.sampleRate, cfg.th);
-    if (f > MIN_F && f < MAX_F) {
-      hist.push(f); if (hist.length > 5) hist.shift();
-      show(median(hist));
-    } else {
-      // Estimar el ruido de fondo cuando no hay nota
-      noiseFloor = noiseFloor * 0.95 + Math.min(rms, 0.05) * 0.05;
-      hist.length = 0;
+    const minClarity = SENS[sens];
+    let accepted = false;
+    if (r.freq > 0 && r.clarity >= minClarity) {
+      recent.push(r.freq); if (recent.length > 3) recent.shift();
+      // Solo se acepta si las 3 últimas lecturas coinciden (±25 cents): ignora ruidos y golpes
+      if (recent.length === 3 && Math.abs(cents(recent[0], recent[1])) < 25 && Math.abs(cents(recent[1], recent[2])) < 25) {
+        if (good.length && Math.abs(cents(r.freq, median(good))) > 80) good.length = 0; // cambió de cuerda
+        good.push(r.freq); if (good.length > 7) good.shift();
+        show(median(good));
+        accepted = true;
+      }
+    } else recent.length = 0;
+
+    if (!accepted) {
       const since = performance.now() - lastHeard;
-      if (since > 2500) idle('Toca una cuerda…');
-      else if (since > 300) disp.classList.add('hold');
+      if (since > 3000) { if (!disp.classList.contains('idle')) idle('Toca una cuerda…'); good.length = 0; }
+      else if (since > 250) disp.classList.add('hold');
+    }
+    if (showDiag) {
+      $('diag').textContent = 'entrada ' + db.toFixed(0) + ' dB · claridad ' + r.clarity.toFixed(2) + ' (mín ' + minClarity + ')' +
+        ' · ' + (r.freq > 0 ? r.freq.toFixed(1) + ' Hz' : '—') + (accepted ? ' ✓' : '') + '\n' + micInfo;
     }
   }
 
@@ -276,25 +265,34 @@
     const ac = audio();
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        audio: {
+          echoCancellation: false, noiseSuppression: false,
+          autoGainControl: true, // la ganancia automática sube la señal débil; no altera la afinación
+          channelCount: 1,
+        },
         video: false,
       });
     } catch {
+      stream = null;
       idle('Sin permiso de micrófono. Actívalo en los ajustes del navegador.');
       setSession('playback');
       return;
     }
+    if (ac.state !== 'running') { try { await ac.resume(); } catch { /* nada */ } }
     source = ac.createMediaStreamSource(stream);
-    // Filtro de banda de guitarra/bajo para quitar zumbidos y ruido agudo
-    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 30; hp.Q.value = 0.7;
-    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1500; lp.Q.value = 0.7;
-    analyser = ac.createAnalyser(); analyser.fftSize = 4096;
+    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 70; hp.Q.value = 0.7;
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2000; lp.Q.value = 0.7;
+    analyser = ac.createAnalyser(); analyser.fftSize = 8192; analyser.smoothingTimeConstant = 0;
     source.connect(hp).connect(lp).connect(analyser); // no va a los altavoces; no se guarda nada
     chain = [hp, lp];
     buf = new Float32Array(analyser.fftSize);
-    yinBuf = new Float32Array(analyser.fftSize >> 1);
-    noiseFloor = 0.001; lastHeard = 0;
-    $('micBtn').textContent = 'Detener micrófono';
+    detect = window.Pitch.createDetector(analyser.fftSize, ac.sampleRate, { minF: 30, maxF: 1500 });
+    try {
+      const s = stream.getAudioTracks()[0].getSettings();
+      micInfo = (ac.sampleRate / 1000).toFixed(1) + ' kHz · AGC ' + (s.autoGainControl ? 'sí' : 'no') + ' · NS ' + (s.noiseSuppression ? 'sí' : 'no') + ' · EC ' + (s.echoCancellation ? 'sí' : 'no');
+    } catch { micInfo = (ac.sampleRate / 1000).toFixed(1) + ' kHz'; }
+    resetTrack(); lastHeard = 0;
+    $('micBtn').textContent = 'Pausar micrófono';
     $('micBtn').classList.add('on');
     idle('Toca una cuerda…');
     keepAwake(true);
@@ -307,21 +305,20 @@
     if (source) source.disconnect();
     chain.forEach(n => n.disconnect());
     stream = source = analyser = null; chain = [];
-    hist.length = 0;
-    $('micBtn').textContent = 'Activar micrófono';
+    resetTrack();
+    $('micBtn').textContent = 'Empezar a afinar';
     $('micBtn').classList.remove('on');
     $('level').style.width = '0';
-    idle('Micrófono apagado');
+    idle('Micrófono en pausa');
     setSession('playback');
     keepAwake(playing);
   }
   $('micBtn').addEventListener('click', () => (stream ? stopMic() : startMic()));
-  idle('Activa el micrófono para empezar');
 
   // ================= METRÓNOMO =================
   let bpm = clamp(Number(store.get('bpm', 120)) || 120, 30, 300);
   let subdiv = [1, 2, 3, 4].includes(store.get('subdiv', 1)) ? store.get('subdiv', 1) : 1;
-  let sound = ['beep', 'clic', 'madera'].includes(store.get('sound', 'beep')) ? store.get('sound', 'beep') : 'beep';
+  let sound = ['beep', 'clic', 'madera'].includes(store.get('sound', 'clic')) ? store.get('sound', 'clic') : 'clic';
   let vol = clamp(Number(store.get('vol', 100)), 0, 100);
   let pattern = store.get('pattern', [2, 1, 1, 1]); // 2 = acento, 1 = pulso, 0 = silencio
   if (!Array.isArray(pattern) || !pattern.length || pattern.length > 12) pattern = [2, 1, 1, 1];
@@ -329,46 +326,41 @@
   const queue = [];
   const buffers = {};
 
-  // Sonidos pre-generados: transitorio fuerte en 1–4 kHz (donde el altavoz del móvil rinde más) y saturados para máximo volumen
+  // Sonidos limpios (sin saturación): senos con ataque suave y caída exponencial.
+  // Frecuencias de 1,5–3 kHz: donde el altavoz del móvil y el oído rinden más.
   function render(kind, level) {
     const sr = ctx.sampleRate, key = kind + level;
     if (buffers[key]) return buffers[key];
-    const dur = kind === 'madera' ? 0.07 : kind === 'clic' ? 0.03 : 0.06;
-    const n = Math.floor(sr * dur), b = ctx.createBuffer(1, n, sr), x = b.getChannelData(0);
-    const hi = level === 2;
+    const P = {
+      clic:   { f: [2600, 2000, 1500], parts: [[1, 1], [2.02, 0.25]], tau: 0.007, dur: 0.05 },
+      beep:   { f: [1760, 1320, 990],  parts: [[1, 1]],               tau: 0.03,  dur: 0.09 },
+      madera: { f: [1400, 1050, 800],  parts: [[1, 1], [2.76, 0.35]], tau: 0.014, dur: 0.07 },
+    }[kind];
+    const f = P.f[level === 2 ? 0 : level === 1 ? 1 : 2];
+    const n = Math.floor(sr * P.dur), b = ctx.createBuffer(1, n, sr), x = b.getChannelData(0);
+    const attack = sr * 0.0015;
     for (let i = 0; i < n; i++) {
-      const t = i / sr, att = Math.min(1, i / (sr * 0.0006));
-      let v;
-      if (kind === 'beep') {
-        const f = hi ? 2000 : level === 1 ? 1500 : 1000;
-        v = Math.sign(Math.sin(2 * Math.PI * f * t)) * 0.7 + Math.sin(2 * Math.PI * f * 2 * t) * 0.3;
-        v *= Math.exp(-t / (dur * 0.6));
-      } else if (kind === 'clic') {
-        const f = hi ? 3400 : level === 1 ? 2600 : 1900;
-        v = (Math.sin(2 * Math.PI * f * t) + (Math.random() * 2 - 1) * 0.6) * Math.exp(-t / 0.006);
-      } else {
-        const f = hi ? 1650 : level === 1 ? 1200 : 900;
-        v = (Math.sin(2 * Math.PI * f * t) + 0.6 * Math.sin(2 * Math.PI * f * 2.76 * t)) * Math.exp(-t / 0.018);
-      }
-      x[i] = Math.tanh(v * 4) * att; // saturación = más volumen percibido
+      const t = i / sr;
+      let v = 0;
+      for (const [r, a] of P.parts) v += a * Math.sin(2 * Math.PI * f * r * t);
+      const env = Math.min(1, i / attack) * Math.exp(-t / P.tau) * Math.min(1, (n - i) / (sr * 0.003));
+      x[i] = v * env;
     }
     let peak = 0; for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(x[i]));
-    const g = (level === 3 ? 0.5 : 1) * 0.99 / (peak || 1);
-    for (let i = 0; i < n; i++) x[i] *= g;
+    const target = level === 2 ? 0.95 : level === 1 ? 0.75 : 0.4; // acento > pulso > subdivisión
+    for (let i = 0; i < n; i++) x[i] *= target / (peak || 1);
     return (buffers[key] = b);
   }
 
   function ensureMaster() {
     if (master) return;
     master = ctx.createGain();
-    const lim = ctx.createDynamicsCompressor(); // limitador para no distorsionar al subir volumen
-    lim.threshold.value = -1; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.05;
-    master.connect(lim).connect(ctx.destination);
+    master.connect(ctx.destination);
     setVol(vol);
   }
   function setVol(v) {
     vol = v; store.set('vol', v); $('vol').value = String(v);
-    if (master) master.gain.value = Math.pow(v / 100, 1.6) * 1.6; // curva perceptual con empuje extra arriba
+    if (master) master.gain.value = Math.pow(v / 100, 1.5); // máximo 1.0: nunca satura
   }
 
   function click(time, level) {
@@ -382,7 +374,7 @@
       const n = pattern.length, s = step % (n * subdiv);
       const isBeat = s % subdiv === 0, bi = Math.floor(s / subdiv);
       const st = pattern[bi];
-      if (st > 0) click(nextTime, isBeat ? st : 3); // 3 = subdivisión (más suave)
+      if (st > 0) click(nextTime, isBeat ? st : 3);
       if (isBeat) queue.push({ time: nextTime, beat: bi });
       nextTime += 60 / bpm / subdiv;
       step++;
@@ -419,7 +411,6 @@
     n = clamp(n, 1, 12);
     while (pattern.length < n) pattern.push(1);
     pattern.length = n;
-    if (!pattern.includes(2) && n > 1 && pattern[0] === 1) pattern[0] = 2;
     store.set('pattern', pattern); renderBeats();
   }
 
@@ -434,7 +425,6 @@
   function startMetro() {
     if (stream) stopMic();
     setSession('playback');
-    // Desbloqueo de audio en iPhone antiguos: un audio silencioso hace que suene aunque el interruptor esté en silencio
     try { const u = $('unlock'); u.volume = 0.01; const p = u.play(); if (p) p.catch(() => {}); } catch { /* nada */ }
     audio(); ensureMaster();
     playing = true; step = 0; queue.length = 0;
@@ -469,7 +459,7 @@
   $('beatsUp').addEventListener('click', () => setBeats(pattern.length + 1));
   $('bpmRange').addEventListener('input', (e) => setBpm(Number(e.target.value)));
   $('subdiv').value = String(subdiv);
-  $('subdiv').addEventListener('change', (e) => { subdiv = Number(e.target.value); store.set('subdiv', subdiv); step = Math.floor(step / subdiv) * subdiv; });
+  $('subdiv').addEventListener('change', (e) => { subdiv = Number(e.target.value); store.set('subdiv', subdiv); step = 0; });
   $('sound').value = sound;
   $('sound').addEventListener('change', (e) => { sound = e.target.value; store.set('sound', sound); });
   $('vol').addEventListener('input', (e) => setVol(Number(e.target.value)));
@@ -486,12 +476,19 @@
   });
 
   setBpm(bpm); setVol(vol); renderBeats();
+  renderStrings();
+  idle('Toca «Empezar a afinar»');
+
+  // Si el permiso del micrófono ya está concedido, empezar a escuchar directamente
+  try {
+    navigator.permissions.query({ name: 'microphone' }).then((p) => { if (p.state === 'granted' && !stream) startMic(); }).catch(() => {});
+  } catch { /* no soportado */ }
 
   // ================= Pestañas y ciclo de vida =================
   document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => { t.classList.toggle('active', t === tab); t.setAttribute('aria-selected', String(t === tab)); });
     document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === tab.dataset.view));
-    if (tab.dataset.view !== 'tuner' && stream) stopMic(); // el micrófono solo vive en el afinador
+    if (tab.dataset.view !== 'tuner' && stream) stopMic();
   }));
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden' && stream) stopMic();
@@ -501,7 +498,6 @@
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('sw.js').catch(() => {});
-    // Al publicar una versión nueva, recargar una vez para usarla
     let reloaded = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (hadController && !reloaded && !stream && !playing) { reloaded = true; location.reload(); }
