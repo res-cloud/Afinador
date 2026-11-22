@@ -168,25 +168,24 @@
 
   // ---------- Detección ----------
   let stream = null, source = null, analyser = null, chain = [], buf = null, detect = null, raf = 0, lastRun = 0, micInfo = '';
-  const recent = [];   // últimas lecturas crudas (para exigir estabilidad)
-  const good = [];     // lecturas estables (para mediana)
-  const pending = [];  // lecturas de una posible nueva cuerda
-  let smooth = 0, lastKey = '', lastHeard = 0, displayIdx = -1;
+  const tracker = window.Pitch.createTracker();
+  let lastKey = '', displayIdx = -1, uiState = 'idle', needle = 0, needleV = 0, needleTarget = 0, lastFresh = 0, t0 = performance.now();
 
-  function resetTrack() { recent.length = 0; good.length = 0; pending.length = 0; lastKey = ''; }
-  const cents = (a, b) => 1200 * Math.log2(a / b);
+  function resetTrack() { tracker.reset(); lastKey = ''; }
   const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
   const disp = $('display');
-  function setState(st) { disp.className = 'display ' + st; }
+  function setState(st) { if (disp.className !== 'display ' + st) disp.className = 'display ' + st; }
+  function setText(id, v) { const el = $(id); if (el.textContent !== v) el.textContent = v; }
 
   function idle(msg) {
+    uiState = 'idle';
     setState('idle');
-    $('note').textContent = '–'; $('octave').textContent = '';
-    $('cents').textContent = '';
-    $('needle').style.left = '50%';
-    $('status').textContent = msg;
-    displayIdx = -1;
+    setText('note', '–'); setText('octave', '');
+    setText('cents', '');
+    needleTarget = 0;
+    setText('status', msg);
+    displayIdx = -1; lastKey = '';
     markStrings(-1, false); showTarget(locked);
   }
 
@@ -201,8 +200,19 @@
     return idx;
   }
 
-  function show(freq) {
-    lastHeard = performance.now();
+  // Estado de color/mensaje con histéresis: no parpadea en los bordes
+  function nextState(prev, c) {
+    const a = Math.abs(c);
+    const base = prev.replace(' hold', '');
+    if (base === 'ok' && a <= 3.5) return 'ok';
+    if (a <= 2) return 'ok';
+    const side = c < 0 ? 'flat' : 'sharp';
+    const wasNear = base.startsWith('near') || base === 'ok';
+    if (a <= 8 || (wasNear && a <= 11)) return 'near ' + side;
+    return side;
+  }
+
+  function show(freq, fresh) {
     const mf = freqToMidi(freq);
     let target, idx = -1;
     if (tuning.notes.length) { idx = chooseString(mf); target = tuning.notes[idx]; }
@@ -211,39 +221,52 @@
       target = (lastKey !== '' && Math.abs(mf - cur) < 0.65) ? cur : Math.round(mf); // histéresis de nota
     }
     displayIdx = idx;
+    lastKey = String(target);
+    const c = (mf - target) * 100, ac = Math.abs(c);
 
-    const raw = (mf - target) * 100;
-    const key = String(target);
-    if (key !== lastKey || Math.abs(raw - smooth) > 40) smooth = raw; else smooth += (raw - smooth) * 0.2;
-    lastKey = key;
-    const c = smooth, ac = Math.abs(c);
-
-    $('note').textContent = noteName(target);
-    $('octave').textContent = String(octaveOf(target));
+    setText('note', noteName(target));
+    setText('octave', String(octaveOf(target)));
     const cr = Math.round(c * 10) / 10 || 0;
-    $('cents').textContent = (cr > 0 ? '+' : '') + cr.toFixed(1) + ' cents · ' + freq.toFixed(2) + ' Hz';
-    $('needle').style.left = (50 + clamp(c, -50, 50)) + '%';
+    setText('cents', (cr > 0 ? '+' : '') + cr.toFixed(1) + ' cents · ' + freq.toFixed(2) + ' Hz');
+    needleTarget = clamp(c, -50, 50);
 
-    let st, msg;
-    if (ac <= 2) { st = 'ok'; msg = '✓ Afinada'; }
-    else {
-      const flat = c < 0;
-      st = (ac <= 8 ? 'near ' : '') + (flat ? 'flat' : 'sharp');
-      if (ac >= 60) {
-        const semis = Math.round(ac / 100);
-        const m = Math.round(mf);
+    const st = nextState(uiState, c);
+    if (st !== uiState.replace(' hold', '') || !uiState) {
+      let msg;
+      if (st === 'ok') msg = '✓ Afinada';
+      else if (ac >= 60) {
+        const flat = c < 0, semis = Math.round(ac / 100), m = Math.round(mf);
         msg = (flat ? '▲ Sube ' : '▼ Baja ') + (semis >= 1 ? semis + (semis === 1 ? ' semitono' : ' semitonos') : 'un poco') + ' (suena ' + noteName(m) + octaveOf(m) + ')';
         if (!flat) msg = '⚠ ' + msg + ': ¡no subas más!';
-      } else msg = flat ? '▲ Sube: aprieta la clavija' : '▼ Baja: afloja la clavija';
+      } else msg = c < 0 ? '▲ Sube: aprieta la clavija' : '▼ Baja: afloja la clavija';
+      setText('status', msg);
+    } else if (ac >= 60) {
+      // el número de semitonos puede cambiar sin cambiar de estado
+      const flat = c < 0, semis = Math.round(ac / 100), m = Math.round(mf);
+      let msg = (flat ? '▲ Sube ' : '▼ Baja ') + (semis >= 1 ? semis + (semis === 1 ? ' semitono' : ' semitonos') : 'un poco') + ' (suena ' + noteName(m) + octaveOf(m) + ')';
+      if (!flat) msg = '⚠ ' + msg + ': ¡no subas más!';
+      setText('status', msg);
     }
-    setState(st);
-    $('status').textContent = msg;
+    uiState = st + (fresh ? '' : ' hold');
+    setState(uiState);
     markStrings(idx, st === 'ok');
     showTarget(idx);
   }
 
+  // Aguja con amortiguación tipo resorte (se mueve suave, sin temblar)
+  function animateNeedle(dt) {
+    const k = 120, d = 2 * Math.sqrt(k); // amortiguación crítica
+    const acc = k * (needleTarget - needle) - d * needleV;
+    needleV += acc * dt; needle += needleV * dt;
+    if (Math.abs(needleTarget - needle) < 0.05 && Math.abs(needleV) < 0.05) { needle = needleTarget; needleV = 0; }
+    $('needle').style.left = (50 + needle) + '%';
+  }
+
+  let lastFrame = 0;
   function loop(ts) {
     raf = requestAnimationFrame(loop);
+    const dt = Math.min(0.05, (ts - (lastFrame || ts)) / 1000); lastFrame = ts;
+    animateNeedle(dt);
     if (ts - lastRun < 30) return;
     lastRun = ts;
     analyser.getFloatTimeDomainData(buf);
@@ -252,40 +275,13 @@
     $('level').style.width = clamp((db + 90) / 70 * 100, 0, 100) + '%';
 
     const minClarity = SENS[sens];
-    let accepted = false;
-    if (r.freq > 0 && r.clarity >= minClarity) {
-      recent.push(r.freq); if (recent.length > 3) recent.shift();
-      // Solo se acepta si las 3 últimas lecturas coinciden (±25 cents): ignora ruidos y golpes
-      if (recent.length === 3 && Math.abs(cents(recent[0], recent[1])) < 25 && Math.abs(cents(recent[1], recent[2])) < 25) {
-        let f = r.freq, held = false;
-        if (good.length) {
-          const ref = median(good);
-          // Plegar saltos de octava (armónicos) a la octava que ya se está afinando
-          for (const k of [2, 0.5, 3, 1 / 3]) if (Math.abs(cents(f / k, ref)) < 45) { f = f / k; break; }
-          if (Math.abs(cents(f, ref)) > 70) {
-            // Posible cambio de cuerda: solo se acepta si se confirma varias veces seguidas
-            pending.push(f);
-            if (pending.length >= 4 && Math.abs(cents(pending[0], pending[pending.length - 1])) < 30) { good.length = 0; good.push(...pending); pending.length = 0; }
-            else held = true;
-          } else pending.length = 0;
-        }
-        if (held) lastHeard = performance.now();
-        else {
-          if (!good.length || Math.abs(cents(f, median(good))) <= 70) { good.push(f); if (good.length > 11) good.shift(); }
-          show(median(good));
-        }
-        accepted = true;
-      }
-    } else recent.length = 0;
+    const out = tracker.update(r, (ts - t0) / 1000, minClarity);
+    if (out) { show(out.freq, out.fresh); lastFresh = out.fresh; }
+    else if (uiState !== 'idle') idle('Toca una cuerda…');
 
-    if (!accepted) {
-      const since = performance.now() - lastHeard;
-      if (since > 3000) { if (!disp.classList.contains('idle')) idle('Toca una cuerda…'); good.length = 0; pending.length = 0; }
-      else if (since > 250) disp.classList.add('hold');
-    }
     if (showDiag) {
-      $('diag').textContent = 'entrada ' + db.toFixed(0) + ' dB · claridad ' + r.clarity.toFixed(2) + ' (mín ' + minClarity + ')' +
-        ' · ' + (r.freq > 0 ? r.freq.toFixed(1) + ' Hz' : '—') + (accepted ? ' ✓' : '') + '\n' + micInfo;
+      setText('diag', 'entrada ' + db.toFixed(0) + ' dB · claridad ' + r.clarity.toFixed(2) + ' (mín ' + minClarity + ')' +
+        ' · ' + (r.freq > 0 ? r.freq.toFixed(1) + ' Hz' : '—') + (out && out.fresh ? ' ✓' : '') + '\n' + micInfo);
     }
   }
 
@@ -324,7 +320,7 @@
       const s = trackSettings;
       micInfo = 'audio ' + (ac.sampleRate / 1000).toFixed(1) + ' kHz · mic ' + (s.sampleRate ? (s.sampleRate / 1000).toFixed(1) + ' kHz' : '?') + ' · AGC ' + (s.autoGainControl ? 'sí' : 'no') + ' · NS ' + (s.noiseSuppression ? 'sí' : 'no') + ' · EC ' + (s.echoCancellation ? 'sí' : 'no');
     } catch { micInfo = (ac.sampleRate / 1000).toFixed(1) + ' kHz'; }
-    resetTrack(); lastHeard = 0;
+    resetTrack();
     $('micBtn').textContent = 'Pausar micrófono';
     $('micBtn').classList.add('on');
     idle('Toca una cuerda…');

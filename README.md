@@ -1,4 +1,4 @@
-# Afinador y metrónomo — v4
+# Afinador y metrónomo — v5
 
 App web instalable (PWA) para el teléfono. Funciona sin conexión una vez instalada.
 
