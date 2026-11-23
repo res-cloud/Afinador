@@ -43,7 +43,7 @@
     const tauMax = Math.min(Math.floor(N * 0.7), Math.ceil(sampleRate / o.minF));
 
     // Devuelve { freq, clarity, rms } (freq = -1 si no hay tono claro)
-    return function detect(input) {
+    const detect = function (input) {
       let mean = 0;
       for (let i = 0; i < N; i++) mean += input[i];
       mean /= N;
@@ -108,9 +108,18 @@
           const lo = Math.max(1, Math.floor(fk * 0.97 / binHz)), hi = Math.min(M / 2 - 1, Math.ceil(fk * 1.03 / binHz));
           let v = -Infinity; for (let k = lo; k <= hi; k++) v = Math.max(v, mag(k)); return v;
         };
+        // Fantasma = sin fuerza en fundamental ni 2.º armónico Y con huecos en la serie de armónicos
+        // (B3 + E4 sobre E2 solo da los armónicos 3, 4, 6, 8…; falta el 5 y el 7). Una cuerda grave real
+        // sin amplificar puede tener débiles el 1.º y el 2.º, pero conserva la serie 3–8 completa.
         const isGhost = (f0) => {
-          const L = [1, 2, 3, 4, 5, 6].map(k => f0 * k < 2000 ? level(f0 * k) : -Infinity);
-          return Math.max(L[0], L[1]) < Math.max(L[2], L[3], L[4], L[5]) - Math.log(10);
+          const L = [1, 2, 3, 4, 5, 6, 7, 8].map(k => f0 * k < 2000 ? level(f0 * k) : -Infinity);
+          const top = Math.max(...L.slice(2));
+          if (!(Math.max(L[0], L[1]) < top - Math.log(10))) return false;
+          // Más grave que la cuerda más grave de la afinación (con margen): no puede ser una cuerda
+          if (o.ghostBelow && f0 < o.ghostBelow) return true;
+          const n = L.slice(2).filter(v => v > -Infinity).length;
+          const present = L.slice(2).filter(v => v >= top - Math.log(o.ghostTol || 10)).length; // dentro de ~20 dB
+          return present < n - 1;
         };
         const hasFund = (f0) => {
           const L = [1, 2, 3, 4].map(k => f0 * k < 2000 ? level(f0 * k) : -Infinity);
@@ -127,6 +136,27 @@
           });
           ghostClar = nsdf[tau]; // la mezcla sí es periódica: su claridad es la del periodo común
           tau = list[0];
+        }
+      }
+
+      // Cuerda grave leída como su 2.º o 3.er armónico (p. ej. 6ª cuerda leída como B3): si los armónicos que
+      // solo tendría la nota más grave (4/3·f y 5/3·f, o 3/2·f y 5/2·f) están presentes, la nota es la grave.
+      if (o.sub === true && o.ghost !== false && !ghostCands) {
+        const binHz = sampleRate / M;
+        const level = (fk) => {
+          const lo = Math.max(1, Math.floor(fk * 0.98 / binHz)), hi = Math.min(M / 2 - 1, Math.ceil(fk * 1.02 / binHz));
+          let v = -Infinity; for (let k = lo; k <= hi; k++) v = Math.max(v, mag(k)); return v;
+        };
+        const f = sampleRate / tau, base = level(f);
+        for (const [k, a, b] of [[3, 4 / 3, 5 / 3], [2, 3 / 2, 5 / 2]]) {
+          const g = f / k;
+          if (g < o.minF || g * b >= 2000) continue;
+          const la = level(f * a), lb = level(f * b);
+          if (la >= base - Math.log(6) && lb >= base - Math.log(6)) {
+            const want = Math.round(tau * k);
+            let p = 0; for (const q of peaks) if (Math.abs(q - want) <= Math.max(2, want * 0.03)) { p = q; break; }
+            if (p && nsdf[p] > 0.3) { tau = p; break; }
+          }
         }
       }
 
@@ -166,6 +196,8 @@
       }
       return { freq, clarity: Math.min(1, Math.max(peakV, ghostClar)), rms, cands: ghostCands };
     };
+    detect.opts = o; // p. ej. detect.opts.ghostBelow = frecuencia mínima razonable para la afinación
+    return detect;
   }
 
   /* Seguimiento estable de la nota a partir de las lecturas del detector.
@@ -177,7 +209,7 @@
    * - La frecuencia mostrada es la media recortada de los últimos ~0,45 s.
    */
   function createTracker(o) {
-    o = Object.assign({ attack: 0.15, window: 0.45, keep: 3, tol: 35, gateDb: 8 }, o || {});
+    o = Object.assign({ attack: 0.12, window: 0.3, keep: 3, tol: 35, gateDb: 8 }, o || {});
     const c = (a, b) => 1200 * Math.log2(a / b);
     const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
     let lock = 0, buf = [], cand = [], alt = [], far = [], farT = 0, prevLock = 0, lastAccept = -1e9, lastOnset = -1e9, env = 0, newPluck = false;

@@ -132,7 +132,7 @@
   }
   tuningSel.addEventListener('change', () => {
     tuning = TUNINGS.find(t => t.id === tuningSel.value);
-    locked = -1; store.set('tuning', tuning.id); resetTrack(); renderStrings();
+    locked = -1; store.set('tuning', tuning.id); resetTrack(); renderStrings(); setGhostBelow();
   });
 
   (() => {
@@ -225,6 +225,9 @@
     return side;
   }
 
+  // Por debajo de la cuerda más grave (−3 semitonos) un periodo sin fundamental es mezcla de cuerdas, no una nota
+  function setGhostBelow() { if (detect) detect.opts.ghostBelow = tuning.notes.length ? midiToFreq(Math.min(...tuning.notes) - 3) : 0; }
+
   function show(freq, fresh) {
     const mf = freqToMidi(freq);
     let target, idx = -1;
@@ -282,7 +285,7 @@
 
   // Aguja con amortiguación tipo resorte (se mueve suave, sin temblar)
   function animateNeedle(dt) {
-    const k = 120, d = 2 * Math.sqrt(k); // amortiguación crítica
+    const k = 260, d = 2 * Math.sqrt(k); // amortiguación crítica (rápida)
     const acc = k * (needleTarget - needle) - d * needleV;
     needleV += acc * dt; needle += needleV * dt;
     if (Math.abs(needleTarget - needle) < 0.05 && Math.abs(needleV) < 0.05) { needle = needleTarget; needleV = 0; }
@@ -348,6 +351,7 @@
     buf = new Float32Array(analyser.fftSize);
     rate = ac.sampleRate;
     detect = window.Pitch.createDetector(analyser.fftSize, ac.sampleRate, { minF: 30, maxF: 1500 });
+    setGhostBelow();
     try {
       const s = trackSettings;
       micInfo = 'audio ' + (ac.sampleRate / 1000).toFixed(1) + ' kHz · mic ' + (s.sampleRate ? (s.sampleRate / 1000).toFixed(1) + ' kHz' : '?') + ' · AGC ' + (s.autoGainControl ? 'sí' : 'no') + ' · NS ' + (s.noiseSuppression ? 'sí' : 'no') + ' · EC ' + (s.echoCancellation ? 'sí' : 'no');
