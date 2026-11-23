@@ -109,7 +109,13 @@
       let t = 0, long = false;
       b.addEventListener('pointerdown', () => { long = false; t = setTimeout(() => { long = true; playReference(m); }, 450); });
       ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, () => clearTimeout(t)));
-      b.addEventListener('click', () => { if (long) return; locked = locked === i ? -1 : i; resetTrack(); markStrings(-1, false); showTarget(locked); });
+      b.addEventListener('click', () => {
+        if (long) return;
+        // Con ♪ activo: tocar una cuerda la hace sonar y la fija (otro toque la vuelve a sonar)
+        if (refMode) { playReference(m); if (locked !== i) { locked = i; resetTrack(); } }
+        else { locked = locked === i ? -1 : i; resetTrack(); }
+        markStrings(-1, false); showTarget(locked);
+      });
       b.addEventListener('contextmenu', (e) => e.preventDefault());
       box.appendChild(b);
     });
@@ -158,6 +164,11 @@
   $('calBtn').addEventListener('click', () => $('calDlg').showModal());
   $('calClose').addEventListener('click', () => $('calDlg').close());
 
+  let refMode = !!store.get('refMode', false);
+  function setRefMode(v) { refMode = v; store.set('refMode', v); $('refBtn').setAttribute('aria-pressed', String(v)); }
+  setRefMode(refMode);
+  $('refBtn').addEventListener('click', () => setRefMode(!refMode));
+
   function playReference(m) {
     const ac = audio();
     if (!stream) setSession('playback');
@@ -191,6 +202,30 @@
   let lastKey = '', playedKey = '', displayIdx = -1, uiState = 'idle', needle = 0, needleV = 0, needleTarget = 0, lastFresh = 0, t0 = performance.now();
 
   function resetTrack() { guitar.reset(); lastKey = ''; playedKey = ''; }
+
+  // ---------- Historial (gráfico de los últimos segundos) ----------
+  const HIST_S = 6, hist = []; let curCents = null, histCol = null;
+  const histCv = $('hist'), histCx = histCv.getContext('2d');
+  function histPush(t) { hist.push({ t, c: curCents }); while (hist.length && t - hist[0].t > HIST_S + 0.5) hist.shift(); }
+  function histDraw(t) {
+    const dpr = window.devicePixelRatio || 1, w = Math.round(histCv.clientWidth * dpr), h = Math.round(histCv.clientHeight * dpr);
+    if (!w || !h) return;
+    if (histCv.width !== w || histCv.height !== h) { histCv.width = w; histCv.height = h; }
+    if (!histCol) { const cs = getComputedStyle(document.documentElement); histCol = ['--green', '--amber', '--red', '--line'].map(v => cs.getPropertyValue(v).trim()); }
+    const [G, A, R, L] = histCol, cx = histCx, y = (c) => h / 2 - Math.max(-25, Math.min(25, c)) / 25 * (h / 2 - 4 * dpr);
+    cx.clearRect(0, 0, w, h);
+    cx.globalAlpha = 0.18; cx.fillStyle = G; cx.fillRect(0, y(3), w, y(-3) - y(3)); cx.globalAlpha = 1;
+    cx.fillStyle = L; cx.fillRect(0, Math.round(h / 2) - dpr / 2, w, dpr);
+    cx.lineWidth = 3 * dpr; cx.lineCap = 'round'; cx.lineJoin = 'round';
+    const x = (p) => w - (t - p.t) / HIST_S * w;
+    for (let i = 1; i < hist.length; i++) {
+      const a = hist[i - 1], b = hist[i];
+      if (a.c == null || b.c == null) continue;
+      const m = Math.abs(b.c);
+      cx.strokeStyle = m <= 3 ? G : m <= 11 ? A : R;
+      cx.beginPath(); cx.moveTo(x(a), y(a.c)); cx.lineTo(x(b), y(b.c)); cx.stroke();
+    }
+  }
   const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
   const disp = $('display');
@@ -202,7 +237,7 @@
     setState('idle');
     setText('note', '–'); setText('octave', '');
     setText('cents', '');
-    needleTarget = 0;
+    needleTarget = 0; curCents = null;
     setText('status', msg);
     displayIdx = -1; lastKey = '';
     markStrings(-1, false); showTarget(locked);
@@ -255,6 +290,7 @@
     const cr = Math.round(c * 10) / 10 || 0;
     setText('cents', showDiag ? (cr > 0 ? '+' : '') + cr.toFixed(1) + ' cents · ' + freq.toFixed(2) + ' Hz' : (Math.round(c) > 0 ? '+' : '') + Math.round(c));
     needleTarget = clamp(c, -50, 50);
+    curCents = c;
 
     const st = nextState(uiState, c);
     // Solo símbolos: ✓ afinada · ▲ subir · ▼ bajar · doble flecha = lejos (con la nota a la que hay que llegar)
@@ -323,6 +359,7 @@
     $('level').classList.toggle('open', tracker.gateOpen);
     if (out) { show(out.freq, out.fresh); lastFresh = out.fresh; }
     else if (uiState !== 'idle') idle('');
+    histPush(ts / 1000); histDraw(ts / 1000);
 
     if (showDiag) {
       setText('diag', 'entrada ' + db.toFixed(0) + ' dB · fondo ' + tracker.floorDb.toFixed(0) + ' dB · puerta ' + (tracker.gateOpen ? 'abierta' : 'cerrada') + ' · claridad ' + r.clarity.toFixed(2) +

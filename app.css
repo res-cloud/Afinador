@@ -209,3 +209,7 @@ svg.circle { width: 100%; max-width: 320px; height: auto; align-self: center; }
 .status { font-size: 34px; letter-spacing: 2px; min-height: 44px; line-height: 44px; }
 .display.idle .status { letter-spacing: 0; line-height: 30px; }
 .arrow .tri { font-size: 44px; }
+
+/* Historial de afinación: últimos segundos, centro = afinada */
+.hist { display: block; width: 100%; height: 72px; margin: 2px 0 6px; border-radius: 12px; background: var(--bg); }
+#refBtn[aria-pressed="true"] { color: var(--bg); background: var(--green); border-color: var(--green); }
