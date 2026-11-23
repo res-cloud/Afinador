@@ -50,6 +50,7 @@
       let energy = 0;
       for (let i = 0; i < N; i++) { const v = input[i] - mean; x[i] = v; energy += v * v; }
       const rms = Math.sqrt(energy / N);
+      let ghostCands = null, ghostClar = 0;
       if (rms < 1e-6) return { freq: -1, clarity: 0, rms };
 
       // Autocorrelación por FFT
@@ -95,6 +96,40 @@
         }
       }
 
+      // Dos cuerdas sonando a la vez (p. ej. la 1ª aún vibra cuando tocas la 2ª) tienen un periodo común
+      // mucho más largo: una "nota fantasma" grave (B3 + E4 → E2). Una cuerda real siempre tiene fuerza en su
+      // fundamental o en su 2.º armónico; la fantasma no. Si es fantasma, se usa el periodo más corto y claro.
+      if (o.ghost !== false) {
+        sre.fill(0); sim.fill(0);
+        for (let i = 0; i < N; i++) sre[i] = x[i] * hann[i];
+        fft(sre, sim, false);
+        const binHz = sampleRate / M;
+        const level = (fk) => {
+          const lo = Math.max(1, Math.floor(fk * 0.97 / binHz)), hi = Math.min(M / 2 - 1, Math.ceil(fk * 1.03 / binHz));
+          let v = -Infinity; for (let k = lo; k <= hi; k++) v = Math.max(v, mag(k)); return v;
+        };
+        const isGhost = (f0) => {
+          const L = [1, 2, 3, 4, 5, 6].map(k => f0 * k < 2000 ? level(f0 * k) : -Infinity);
+          return Math.max(L[0], L[1]) < Math.max(L[2], L[3], L[4], L[5]) - Math.log(10);
+        };
+        const hasFund = (f0) => {
+          const L = [1, 2, 3, 4].map(k => f0 * k < 2000 ? level(f0 * k) : -Infinity);
+          return L[0] >= Math.max(L[1], L[2], L[3]) - Math.log(10);
+        };
+        if (isGhost(sampleRate / tau)) {
+          // Candidatas: periodos más cortos con fundamental propia (cada una de las cuerdas que suenan)
+          const list = peaks.filter(p => p <= tau * 0.6 && p >= tauMin && nsdf[p] > 0.3 && hasFund(sampleRate / p))
+            .sort((p, q) => nsdf[q] - nsdf[p]);
+          if (!list.length) return { freq: -1, clarity: 0, rms };
+          ghostCands = list.slice(0, 4).map(p => {
+            const a = nsdf[p - 1], b = nsdf[p], c = nsdf[p + 1], den = a - 2 * b + c;
+            return sampleRate / (p + (den < 0 ? 0.5 * (a - c) / den : 0));
+          });
+          ghostClar = nsdf[tau]; // la mezcla sí es periódica: su claridad es la del periodo común
+          tau = list[0];
+        }
+      }
+
       // Interpolación parabólica
       const a = nsdf[tau - 1], b = nsdf[tau], c = nsdf[tau + 1];
       const den = a - 2 * b + c;
@@ -106,9 +141,11 @@
       // la periodicidad global sale unos cents alta. Medimos el pico del armónico más bajo que tenga fuerza
       // (fundamental o, si el micrófono del móvil la atenúa, el 2.º) y dividimos por su número.
       if (o.refine !== false) {
-        sre.fill(0); sim.fill(0);
-        for (let i = 0; i < N; i++) sre[i] = x[i] * hann[i];
-        fft(sre, sim, false);
+        if (o.ghost === false) {
+          sre.fill(0); sim.fill(0);
+          for (let i = 0; i < N; i++) sre[i] = x[i] * hann[i];
+          fft(sre, sim, false);
+        }
         const binHz = sampleRate / M;
         const peakNear = (fk) => {
           const lo = Math.max(2, Math.floor(fk * 0.97 / binHz)), hi = Math.min(M / 2 - 2, Math.ceil(fk * 1.03 / binHz));
@@ -127,7 +164,7 @@
           if (Math.abs(1200 * Math.log2(fr / freq)) < 25) freq = fr;
         }
       }
-      return { freq, clarity: Math.min(1, peakV), rms };
+      return { freq, clarity: Math.min(1, Math.max(peakV, ghostClar)), rms, cands: ghostCands };
     };
   }
 
@@ -143,7 +180,7 @@
     o = Object.assign({ attack: 0.15, window: 0.45, keep: 3, tol: 35, gateDb: 8 }, o || {});
     const c = (a, b) => 1200 * Math.log2(a / b);
     const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
-    let lock = 0, buf = [], cand = [], alt = [], lastAccept = -1e9, lastOnset = -1e9, env = 0, newPluck = false;
+    let lock = 0, buf = [], cand = [], alt = [], far = [], farT = 0, prevLock = 0, lastAccept = -1e9, lastOnset = -1e9, env = 0, newPluck = false;
     let floorHist = [], floorDb = -75, peakDb = -75, open = false, openSince = 0;
     let ev = null, evId = 0; const recentDb = [];
 
@@ -152,7 +189,7 @@
       const k = Math.floor(s.length * 0.2), part = s.slice(k, s.length - k || undefined);
       return part.reduce((a, b) => a + b, 0) / part.length;
     }
-    function relock(arr, t) { lock = med(arr); buf = arr.map(f => ({ f, t })); cand = []; alt = []; newPluck = false; }
+    function relock(arr, t) { const nl = med(arr); if (lock && Math.abs(c(nl, lock)) > 50) prevLock = lock; lock = nl; buf = arr.map(f => ({ f, t })); cand = []; alt = []; far = []; newPluck = false; }
     // Umbral de apertura: por encima del ruido de fondo Y por encima de los picos del ambiente
     // (golpes de bajo de la música del vecino, carros…): solo abre una cuerda tocada cerca.
     function threshold() { return Math.max(floorDb + o.gateDb, Math.min(peakDb + (o.peakMargin == null ? 3 : o.peakMargin), floorDb + (o.cap || 12))); }
@@ -172,7 +209,7 @@
       get thresholdDb() { return threshold(); },
       get gateOpen() { return open; },
       setGate(db) { o.gateDb = db; },
-      reset() { lock = 0; buf = []; cand = []; alt = []; lastAccept = -1e9; newPluck = false; floorHist = []; floorDb = -75; peakDb = -75; open = false; ev = null; recentDb.length = 0; },
+      reset() { prevLock = 0; lock = 0; buf = []; cand = []; alt = []; far = []; lastAccept = -1e9; newPluck = false; floorHist = []; floorDb = -75; peakDb = -75; open = false; ev = null; recentDb.length = 0; },
       // r = { freq, clarity, rms }, t en segundos. Devuelve { freq, fresh } o null.
       update(r, t, minClarity, prior) {
         // Nivel para la puerta: si la app lo da, solo la banda de 250–2000 Hz con ventana corta.
@@ -228,6 +265,13 @@
         // Solo se usan lecturas con la cuerda claramente por encima del fondo (si no, el fondo contamina la medida)
         const strong = o.gateDb <= 0 || db > floorDb + o.gateDb - (o.strongDrop || 3);
         let f = (open && strong && !inAttack && r.freq > 0 && r.clarity >= minClarity) ? r.freq : 0;
+        // Dos cuerdas a la vez: si una de ellas es la que ya se mostraba, la otra es la que acabas de tocar
+        if (f && r.cands && lock) {
+          const near = (g, ref) => { if (!ref) return false; for (const k of [1, 2, 0.5, 3, 1 / 3]) if (Math.abs(c(g / k, ref)) < 40) return true; return false; };
+          // 1) una cuerda nueva (ni la actual ni la anterior) · 2) la actual · 3) la más clara
+          const pick = r.cands.find(g => !near(g, lock) && !near(g, prevLock)) || r.cands.find(g => Math.abs(c(g, lock)) < 40);
+          if (pick) f = pick;
+        }
         if (f && prior) f = prior(f, lock) || 0;
         if (f) {
           if (!lock || newPluck) {
@@ -245,6 +289,19 @@
             const need = harmonic ? 12 : 6;
             alt.push(f); if (alt.length > need) alt.shift();
             if (alt.length === need && Math.abs(c(Math.max(...alt), Math.min(...alt))) < 25) relock(alt, t);
+          } else {
+            // Nota lejana sin ataque detectado: pasaste a otra cuerda mientras la anterior seguía sonando
+            // (púa suave). Si la nueva nota se mantiene firme ~0,5 s, se cambia a ella. Un armónico de la
+            // cuerda anterior necesita el doble de tiempo para no confundirse.
+            let harmonic = false;
+            for (const k of [2, 0.5, 3, 1 / 3, 4, 0.25, 1.5, 2 / 3]) if (Math.abs(c(f / k, lock)) < 30) harmonic = true;
+            // Solo hacia una nota que sea una cuerda de la afinación (la música de fondo cae en cualquier nota)
+            if (o.isString && !o.isString(f)) { far = []; lastAccept = t; return lock ? { freq: lock, fresh: t - lastAccept < 0.5 } : null; }
+            const need = harmonic ? (o.farHarm || 24) : (o.far || 16);
+            if (far.length && (Math.abs(c(f, med(far))) > 30 || t - farT > 0.5)) far = [];
+            farT = t;
+            far.push(f); if (far.length > need) far.shift();
+            if (far.length === need && Math.abs(c(Math.max(...far), Math.min(...far))) < 25) { relock(far, t); far = []; }
           }
           lastAccept = t;
         }

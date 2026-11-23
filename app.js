@@ -90,6 +90,16 @@
     const box = $('strings');
     box.textContent = '';
     $('stringTip').hidden = true;
+    if (tuning.notes.length) {
+      // AUTO: reconoce cualquier cuerda en cualquier orden. Tocar una cuerda la fija; tocar AUTO la suelta.
+      const ab = document.createElement('button');
+      ab.className = 'string autoBtn'; ab.id = 'autoBtn'; ab.setAttribute('aria-label', 'Automático');
+      const an = document.createElement('span'); an.textContent = 'A';
+      const as = document.createElement('small'); as.textContent = 'auto';
+      ab.append(an, as);
+      ab.addEventListener('click', () => { locked = -1; resetTrack(); markStrings(-1, false); showTarget(locked); });
+      box.appendChild(ab);
+    }
     tuning.notes.forEach((m, i) => {
       const b = document.createElement('button');
       b.className = 'string';
@@ -112,12 +122,13 @@
     $('target').textContent = 'Objetivo: ' + noteName(m) + octaveOf(m) + ' · ' + (tuning.notes.length - idx) + 'ª cuerda · ' + midiToFreq(m).toFixed(1) + ' Hz' + (idx === locked ? ' · fijada' : '');
   }
   function markStrings(idx, ok) {
-    const kids = $('strings').children;
+    const kids = [...$('strings').children].filter(k => !k.classList.contains('autoBtn'));
     for (let i = 0; i < kids.length; i++) {
       kids[i].classList.toggle('locked', i === locked);
       kids[i].classList.toggle('auto', locked < 0 && i === idx);
       kids[i].classList.toggle('ok', ok && i === idx);
     }
+    const ab = $('autoBtn'); if (ab) ab.classList.toggle('on', locked < 0);
   }
   tuningSel.addEventListener('change', () => {
     tuning = TUNINGS.find(t => t.id === tuningSel.value);
@@ -165,7 +176,11 @@
 
   // ---------- Detección ----------
   let stream = null, source = null, analyser = null, chain = [], buf = null, detect = null, raf = 0, lastRun = 0, micInfo = '';
-  const tracker = window.Pitch.createTracker({ gateDb: 8, peakMargin: 5, cap: 18 });
+  const tracker = window.Pitch.createTracker({
+    gateDb: 8, peakMargin: 5, cap: 18,
+    // Cambio de cuerda sin ataque claro: solo hacia una nota que sea una cuerda de la afinación
+    isString: (f) => !tuning.notes.length || tuning.notes.some(m => Math.abs(1200 * Math.log2(f / midiToFreq(m))) < 60),
+  });
   let rate = 48000;
   let lastKey = '', playedKey = '', displayIdx = -1, uiState = 'idle', needle = 0, needleV = 0, needleTarget = 0, lastFresh = 0, t0 = performance.now();
 

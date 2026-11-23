@@ -89,6 +89,8 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .string.auto { border-color: var(--muted); }
 .string.locked { border-color: var(--text); background: var(--panel2); }
 .string.ok { border-color: var(--green); color: var(--green); }
+.string.autoBtn { flex: 0.8; color: var(--muted); }
+.string.autoBtn.on { border-color: var(--text); color: var(--text); background: var(--panel2); }
 
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 18px; width: min(92vw, 420px); padding: 0; }
 dialog::backdrop { background: rgba(0,0,0,.6); }
