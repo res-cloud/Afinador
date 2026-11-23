@@ -221,11 +221,13 @@
       }
       if (!parts.length) return 0;
       const best = Math.max(...parts.map(q => q.m));
-      if (best < noise + Math.log(30)) return 0; // ~30 dB sobre el fondo del espectro
+      if (best < noise + Math.log(10)) return 0; // ~20 dB sobre el fondo del espectro como mínimo
       const use = parts.find(q => q.m >= best - Math.log(6));
       // Los demás armónicos fuertes deben coincidir (si no, es otra cuerda la que cae en la ventana)
       const agree = parts.filter(q => q.m >= best - Math.log(10) && Math.abs(1200 * Math.log2(q.f / use.f)) < 20).length;
       const strong = parts.filter(q => q.m >= best - Math.log(10)).length;
+      // Señal débil (cuerda grave, sin enchufar): vale si al menos 3 armónicos coinciden en la misma nota
+      if (best < noise + Math.log(30) && agree < 3) return 0;
       return agree >= Math.max(1, strong - 1) ? use.f : 0;
     }
     detect.opts = o; // p. ej. detect.opts.ghostBelow = frecuencia mínima razonable para la afinación
@@ -423,7 +425,7 @@
    * update(spec, t, binHz, strings, active) → { onset, idx }  (idx = cuerda probable, -1 si no se sabe) */
   function createOnset(o) {
     o = Object.assign({ ratio: 0.35, factor: 2.5, refractory: 0.18, collect: 3, margin: 1.08 }, o || {});
-    let prev = null, hist = [], last = -1e9, acc = null, pend = 0, lastD = null;
+    let prev = null, hist = [], last = -1e9, acc = null, pend = 0, lastD = null, ext = false;
     function score1(D, binHz, fk) {
       const lo = Math.max(1, Math.floor(fk * 0.975 / binHz)), hi = Math.min(D.length - 1, Math.ceil(fk * 1.025 / binHz));
       let m = 0; for (let k = lo; k <= hi; k++) if (D[k] > m) m = D[k];
@@ -477,12 +479,14 @@
                 });
                 if (low !== bi) { bi = low; second = 0; bs = Math.max(bs, o.minScore || 8) + 1; out.viaLow = true; }
               }
-              out.idx = bs > (o.minScore || 8) && bs > second * o.margin ? bi : -1;
-              out.score = bs; out.t0 = last; acc = null;
+              out.idx = (ext ? bs > 12 && bs > second * 1.03 : bs > (o.minScore || 8) && bs > second * o.margin) ? bi : -1;
+              // Dudosa: las cuerdas graves tardan más en aparecer en el espectro. Se sigue acumulando un poco más.
+              if (out.idx < 0 && !ext && !globalThis.NOEXT) { ext = true; pend = o.extend || 4; out = { onset: false, idx: -1 }; }
+              else { out.score = bs; out.t0 = last; acc = null; }
             }
           } else if (active && t - last > o.refractory && ratio > o.ratio && flux > o.factor * medFlux && fluxHi >= (o.hiShare == null ? 0.4 : o.hiShare) * flux) {
             // (una púa cercana es brillante: buena parte del sonido nuevo está por encima de 250 Hz; un bajo de fondo no)
-            last = t; out.onset = true; acc = D; pend = o.collect;
+            last = t; out.onset = true; acc = D; pend = o.collect; ext = false;
             if (lastD) for (let k = 0; k < D.length; k++) acc[k] += lastD[k];
           }
           lastD = D;
@@ -501,6 +505,7 @@
   function createGuitar(o) {
     const tracker = createTracker(o.tracker), onset = createOnset(o.onset);
     const c = (a, b) => 1200 * Math.log2(a / b);
+    const recent = []; let mask = null;
     let focus = -1, focusUntil = 0, focusT = -1e9, oldF = 0, force = true, dis = [], amb = null, ambMed = 0, ambT = 0, ambLastT = -1;
     function isAmbient(f, spec, binHz) {
       if (!ambMed || ambT++ % 30 === 0) { const v = [...amb].sort((a, b) => a - b); ambMed = v[v.length >> 1] + 1e-12; }
@@ -515,7 +520,7 @@
     return {
       tracker,
       get focus() { return focus; },
-      reset() { tracker.reset(); onset.reset(); focus = -1; focusUntil = 0; amb = null; ambMed = 0; },
+      reset() { tracker.reset(); onset.reset(); focus = -1; focusUntil = 0; amb = null; ambMed = 0; recent.length = 0; },
       update(r, t, minClarity, prior) {
         const S = o.strings(), L = o.locked();
         if (S.length && r.spec) {
@@ -536,6 +541,7 @@
             const same = on.idx === focus && t < focusUntil;
             if (!same) oldF = tracker.lockFreq || oldF;
             focus = on.idx; focusUntil = t + 4; focusT = t; force = !on.viaLow;
+            if (!recent.some(q => Math.abs(c(q.f, S[on.idx])) < 50)) recent.push({ f: S[on.idx], t }); else recent.find(q => Math.abs(c(q.f, S[on.idx])) < 50).t = t;
             // Si es claramente OTRA cuerda, se suelta ya la anterior; si hay duda, se mantiene a la vista hasta fijar la nueva
             const lf = tracker.lockFreq;
             tracker.hint(t, !same && force && lf > 0 && Math.abs(c(lf, S[on.idx])) > 150, force ? S[on.idx] : 0);
@@ -550,7 +556,19 @@
           if (!amb || amb.length !== r.spec.length) amb = Float32Array.from(r.spec);
           else {
             const dt = ambLastT >= 0 ? Math.min(0.2, Math.max(0, t - ambLastT)) : 0.03; ambLastT = t;
-            if (!tracker.gateOpen) { const w = 1 - Math.pow(0.96, dt / 0.03); for (let k = 0; k < amb.length; k++) amb[k] = amb[k] * (1 - w) + r.spec[k] * w; }
+            if (!tracker.gateOpen) {
+              // No aprender como "ambiente" las cuerdas que acaban de sonar (siguen vibrando con la puerta cerrada):
+              // se excluyen sus armónicos. Así el zumbido del cuarto se aprende, pero la guitarra no.
+              const lf = tracker.lockFreq; if (lf > 0 && !recent.some(q => Math.abs(c(q.f, lf)) < 50)) recent.push({ f: lf, t });
+              while (recent.length && (t - recent[0].t > 20 || recent.length > 6)) recent.shift();
+              const w = 1 - Math.pow(0.96, dt / 0.03), bh = r.binHz;
+              if (!mask || mask.length !== amb.length) mask = new Uint8Array(amb.length);
+              mask.fill(0);
+              // (también las cuerdas de la afinación: las que no tocas vibran por simpatía)
+              const marks = recent.map(q => [q.f, 0.025]).concat(S.map(f => [f, 0.03]));
+              for (const [f0, tol] of marks) for (let h = 1; h <= 12; h++) { const fk = f0 * h; if (fk > 2000) break; const lo = Math.max(0, Math.floor(fk * (1 - tol) / bh)), hi = Math.min(amb.length - 1, Math.ceil(fk * (1 + tol) / bh)); for (let k = lo; k <= hi; k++) mask[k] = 1; }
+              for (let k = 0; k < amb.length; k++) if (!mask[k]) amb[k] = amb[k] * (1 - w) + r.spec[k] * w;
+            }
           }
           if (r.freq > 0) { const fp = prior ? prior(r.freq) : r.freq; if (isAmbient(r.freq, r.spec, r.binHz) && (!fp || isAmbient(fp, r.spec, r.binHz))) r = Object.assign({}, r, { freq: -1, cands: null }); }
         }
@@ -572,9 +590,17 @@
           if (other) { if (dis.length && Math.abs(c(f, dis[dis.length - 1])) > 30) dis = []; dis.push(f); } else dis = [];
           if (dis.length >= 6) { focus = -1; focusUntil = 0; dis = []; isOld = false; }
           if (!fits && isOld) {
-            const g = r.near(nom, 150);
+            const g = r.near(nom, 100);
             if (g) { rr = Object.assign({}, r, { freq: g, clarity: Math.max(r.clarity, 0.8), cands: null }); if (L < 0) focusUntil = t + 4; }
-          } else if (L < 0) focusUntil = t + 4;
+          } else {
+            if (L < 0) focusUntil = t + 4;
+            // La cuerda elegida suena pero la lectura general es poco clara (típico de la 6.ª, grave y débil):
+            // se mide directamente esa cuerda en el espectro y, si coincide, se usa con confianza.
+            if (fits && r.clarity < 0.65 && !globalThis.NOBOOST) {
+              const g = r.near(nom, 100);
+              if (g && Math.abs(c(g, f)) < 40) rr = Object.assign({}, r, { freq: g, clarity: 0.8, cands: null });
+            }
+          }
         }
         return tracker.update(rr, t, minClarity, prior);
       },
