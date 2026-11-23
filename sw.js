@@ -1,7 +1,7 @@
 // Service worker: guarda la app para que funcione sin conexión.
 // Solo sirve archivos propios; no hace ninguna petición a terceros.
-const CACHE = 'afinador-v13';
-const FILES = ['./', 'index.html', 'app.css', 'app.js', 'pitch.js', 'scales.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'silence.wav'];
+const CACHE = 'afinador-v14';
+const FILES = ['./', 'index.html', 'app.css', 'app.js', 'pitch.js', 'scales.js', 'manifest.webmanifest', 'icon.svg', 'chevron.svg', 'icon-192.png', 'icon-512.png', 'silence.wav'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));

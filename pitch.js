@@ -246,7 +246,7 @@
     const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
     let lock = 0, buf = [], cand = [], alt = [], far = [], farT = 0, prevLock = 0, lastAccept = -1e9, lastOnset = -1e9, env = 0, newPluck = false;
     let floorHist = [], floorDb = -75, peakDb = -75, open = false, openSince = 0;
-    let ev = null, evId = 0, t0 = -1, lastT = -1, dtE = 0.03; const recentDb = [];
+    let earlyLock = false, expectF = 0, ev = null, evId = 0, t0 = -1, lastT = -1, dtE = 0.03; const recentDb = [];
     // Cuántas lecturas equivalen a 'sec' segundos (el teléfono puede procesar a otro ritmo)
     const nFor = (sec) => Math.max(3, Math.round(sec / dtE));
 
@@ -255,7 +255,7 @@
       const k = Math.floor(s.length * 0.2), part = s.slice(k, s.length - k || undefined);
       return part.reduce((a, b) => a + b, 0) / part.length;
     }
-    function relock(arr, t) { const nl = med(arr); if (lock && Math.abs(c(nl, lock)) > 50) prevLock = lock; lock = nl; buf = arr.map(f => ({ f, t })); cand = []; alt = []; far = []; newPluck = false; }
+    function relock(arr, t) { const nl = med(arr); if (lock && Math.abs(c(nl, lock)) > 50) prevLock = lock; lock = nl; buf = arr.map(f => ({ f, t })); cand = []; alt = []; far = []; newPluck = false; expectF = 0; earlyLock = false; }
     // Umbral de apertura: por encima del ruido de fondo Y por encima de los picos del ambiente
     // (golpes de bajo de la música del vecino, carros…): solo abre una cuerda tocada cerca.
     function threshold() {
@@ -281,7 +281,7 @@
       get lockFreq() { return lock; },
       setGate(db) { o.gateDb = db; },
       // Púa nueva detectada por fuera (flujo espectral): olvidar la cuerda anterior y fijarse en la nueva
-      hint(t, drop) { lastOnset = t; newPluck = true; cand = []; alt = []; far = []; if (drop && lock) { prevLock = lock; lock = 0; buf = []; } },
+      hint(t, drop, expect) { lastOnset = t; newPluck = true; expectF = expect || 0; cand = []; alt = []; far = []; if (drop && lock) { prevLock = lock; lock = 0; buf = []; } },
       reset() { prevLock = 0; lock = 0; buf = []; cand = []; alt = []; far = []; lastAccept = -1e9; newPluck = false; floorHist = []; floorDb = -75; peakDb = -75; open = false; ev = null; t0 = -1; recentDb.length = 0; },
       // r = { freq, clarity, rms }, t en segundos. Devuelve { freq, fresh } o null.
       update(r, t, minClarity, prior) {
@@ -341,6 +341,12 @@
         // Solo se usan lecturas con la cuerda claramente por encima del fondo (si no, el fondo contamina la medida)
         const strong = o.gateDb <= 0 || db > floorDb + o.gateDb - (o.strongDrop || 3);
         let f = (open && strong && !inAttack && r.freq > 0 && r.clarity >= minClarity) ? r.freq : 0;
+        // Púa ya identificada (se sabe qué cuerda es): si la lectura cae en esa cuerda, sirve desde ya (respuesta rápida)
+        let fast = false;
+        if (!f && inAttack && expectF && open && strong && bright && floorHist.length >= nFor(1.5) && r.freq > 0 && r.clarity >= 0.8) {
+          const g = prior ? prior(r.freq, lock) : r.freq;
+          if (g && Math.abs(c(g, expectF)) < 60) { f = r.freq; fast = true; }
+        }
         // Dos cuerdas a la vez: si una de ellas es la que ya se mostraba, la otra es la que acabas de tocar
         if (f && r.cands && lock) {
           const near = (g, ref) => { if (!ref) return false; for (const k of [1, 2, 0.5, 3, 1 / 3]) if (Math.abs(c(g / k, ref)) < 40) return true; return false; };
@@ -353,7 +359,14 @@
           if (!lock || newPluck) {
             cand.push(f); if (cand.length > 4) cand.shift();
             // 3 lecturas que coinciden (una suelta de más no impide fijar la nota)
-            if (cand.length >= 3) { const m = med(cand), ok = cand.filter(g => Math.abs(c(g, m)) < 13); if (ok.length >= 3) relock(ok, t); }
+            let done = false;
+            if (expectF && cand.length >= 2 && Math.abs(c(cand[cand.length - 1], cand[cand.length - 2])) < 15 && Math.abs(c(cand[cand.length - 1], expectF)) < 60) { relock(cand.slice(-2), t); earlyLock = fast; done = true; }
+            if (!done && cand.length >= 3) { const m = med(cand), ok = cand.filter(g => Math.abs(c(g, m)) < 13); if (ok.length >= 3) relock(ok, t); }
+          } else if (earlyLock && !inAttack && Math.abs(c(f, lock)) <= 100) {
+            // Nota fijada con el ataque (suele salir algo alta): en cuanto llega el sonido estable, se usa solo ese
+            buf = buf.filter(b => b.late); buf.push({ f, t, late: true });
+            if (buf.length >= 2) earlyLock = false;
+            lock = trimmed();
           } else if (Math.abs(c(f, lock)) <= o.tol) {
             buf.push({ f, t }); alt = [];
             while (buf.length > 3 && t - buf[0].t > o.window) buf.shift();
@@ -525,7 +538,7 @@
             focus = on.idx; focusUntil = t + 4; focusT = t; force = !on.viaLow;
             // Si es claramente OTRA cuerda, se suelta ya la anterior; si hay duda, se mantiene a la vista hasta fijar la nueva
             const lf = tracker.lockFreq;
-            tracker.hint(t, !same && force && lf > 0 && Math.abs(c(lf, S[on.idx])) > 150);
+            tracker.hint(t, !same && force && lf > 0 && Math.abs(c(lf, S[on.idx])) > 150, force ? S[on.idx] : 0);
           } else if (L < 0 && on.idx === -1 && on.score != null) {
             // Púa nueva pero no se sabe qué cuerda: soltar la anterior y decidir con las lecturas
             oldF = tracker.lockFreq || oldF; focus = -1; focusUntil = 0; tracker.hint(t, false);

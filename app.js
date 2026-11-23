@@ -127,28 +127,23 @@
     const m = tuning.notes[idx];
     $('target').textContent = 'Objetivo: ' + noteName(m) + octaveOf(m) + ' · ' + (tuning.notes.length - idx) + 'ª cuerda · ' + midiToFreq(m).toFixed(1) + ' Hz' + (idx === locked ? ' · fijada' : '');
   }
+  // Cuerdas ya afinadas en esta sesión (punto verde); se borra al cambiar de afinación
+  const tuned = new Set(); let okSince = 0, okIdx = -1;
   function markStrings(idx, ok) {
     const kids = [...$('strings').children].filter(k => !k.classList.contains('autoBtn'));
     for (let i = 0; i < kids.length; i++) {
       kids[i].classList.toggle('locked', i === locked);
       kids[i].classList.toggle('auto', locked < 0 && i === idx);
       kids[i].classList.toggle('ok', ok && i === idx);
+      kids[i].classList.toggle('done', tuned.has(i));
     }
     const ab = $('autoBtn'); if (ab) ab.classList.toggle('on', locked < 0);
   }
   tuningSel.addEventListener('change', () => {
     tuning = TUNINGS.find(t => t.id === tuningSel.value);
-    locked = -1; store.set('tuning', tuning.id); resetTrack(); renderStrings(); setGhostBelow();
+    locked = -1; tuned.clear(); store.set('tuning', tuning.id); resetTrack(); renderStrings(); setGhostBelow();
   });
 
-  (() => {
-    const t = $('ticks');
-    for (let c = -50; c <= 50; c += 5) {
-      const i = document.createElement('i');
-      if (c === 0) i.className = 'c'; else if (Math.abs(c) <= 5) i.className = 'g'; else if (c % 25 === 0) i.className = 'mid';
-      t.appendChild(i);
-    }
-  })();
 
   // ---------- Ajustes ----------
   // Claridad mínima de la señal (1 = tono puro). Fija: la puerta de ruido adaptativa hace el resto.
@@ -203,29 +198,82 @@
 
   function resetTrack() { guitar.reset(); lastKey = ''; playedKey = ''; }
 
-  // ---------- Historial (gráfico de los últimos segundos) ----------
-  const HIST_S = 6, hist = []; let curCents = null, histCol = null;
-  const histCv = $('hist'), histCx = histCv.getContext('2d');
-  function histPush(t) { hist.push({ t, c: curCents }); while (hist.length && t - hist[0].t > HIST_S + 0.5) hist.shift(); }
-  function histDraw(t) {
-    const dpr = window.devicePixelRatio || 1, w = Math.round(histCv.clientWidth * dpr), h = Math.round(histCv.clientHeight * dpr);
-    if (!w || !h) return;
-    if (histCv.width !== w || histCv.height !== h) { histCv.width = w; histCv.height = h; }
-    if (!histCol) { const cs = getComputedStyle(document.documentElement); histCol = ['--green', '--amber', '--red', '--line'].map(v => cs.getPropertyValue(v).trim()); }
-    const [G, A, R, L] = histCol, cx = histCx, y = (c) => h / 2 - Math.max(-25, Math.min(25, c)) / 25 * (h / 2 - 4 * dpr);
-    cx.clearRect(0, 0, w, h);
-    cx.globalAlpha = 0.18; cx.fillStyle = G; cx.fillRect(0, y(3), w, y(-3) - y(3)); cx.globalAlpha = 1;
-    cx.fillStyle = L; cx.fillRect(0, Math.round(h / 2) - dpr / 2, w, dpr);
-    cx.lineWidth = 3 * dpr; cx.lineCap = 'round'; cx.lineJoin = 'round';
-    const x = (p) => w - (t - p.t) / HIST_S * w;
-    for (let i = 1; i < hist.length; i++) {
-      const a = hist[i - 1], b = hist[i];
-      if (a.c == null || b.c == null) continue;
-      const m = Math.abs(b.c);
-      cx.strokeStyle = m <= 3 ? G : m <= 11 ? A : R;
-      cx.beginPath(); cx.moveTo(x(a), y(a.c)); cx.lineTo(x(b), y(b.c)); cx.stroke();
-    }
+  // ---------- Carril de afinación ----------
+  // Arriba, la burbuja con la nota que suena (se mueve con la afinación); hacia abajo, la traza de los
+  // últimos segundos. Centro = afinada. Fina, con desvanecido, y del color del estado.
+  const HIST_S = 5, hist = []; let curCents = null, curNote = '', laneCol = null;
+  const laneCv = $('lane'), laneCx = laneCv.getContext('2d');
+  function histPush(t) { hist.push({ t, c: curCents, n: curNote }); while (hist.length && t - hist[0].t > HIST_S + 0.5) hist.shift(); }
+  function readColors() {
+    const cs = getComputedStyle(document.documentElement), g = (v) => cs.getPropertyValue(v).trim();
+    laneCol = { ok: g('--accent'), near: g('--amber'), far: g('--red'), line: g('--line'), grid: g('--grid'), text: g('--text'), muted: g('--muted'), panel: g('--panel'), bg: g('--bg') };
   }
+  const colorFor = (c) => { const a = Math.abs(c); return a <= 3 ? laneCol.ok : a <= 8 ? laneCol.near : laneCol.far; };
+  const stateColor = () => uiState.startsWith('ok') ? laneCol.ok : uiState.startsWith('near') ? laneCol.near : laneCol.far;
+  function laneDraw(t) {
+    const dpr = window.devicePixelRatio || 1, w = Math.round(laneCv.clientWidth * dpr), h = Math.round(laneCv.clientHeight * dpr);
+    if (!w || !h) return;
+    if (laneCv.width !== w || laneCv.height !== h) { laneCv.width = w; laneCv.height = h; }
+    if (!laneCol) readColors();
+    const C = laneCol, cx = laneCx, pad = 22 * dpr, top = 30 * dpr, mid = w / 2, span = mid - pad;
+    const X = (c) => mid + Math.max(-50, Math.min(50, c)) / 50 * span;
+    const Y = (pt) => top + (t - pt) / HIST_S * (h - top);
+    cx.clearRect(0, 0, w, h);
+    // zona afinada (±3 c): franja suave que se desvanece hacia abajo
+    const band = cx.createLinearGradient(0, top, 0, h);
+    band.addColorStop(0, C.ok + '33'); band.addColorStop(1, C.ok + '00');
+    cx.fillStyle = band; cx.fillRect(X(-3), top, X(3) - X(-3), h - top);
+    // rejilla
+    cx.lineWidth = dpr;
+    for (let c = -50; c <= 50; c += 10) {
+      if (!c) continue;
+      cx.strokeStyle = C.grid; cx.globalAlpha = Math.abs(c) % 50 === 0 ? 0.9 : 0.5;
+      cx.beginPath(); cx.moveTo(Math.round(X(c)) + 0.5, top); cx.lineTo(Math.round(X(c)) + 0.5, h); cx.stroke();
+    }
+    for (let s2 = 1; s2 < HIST_S; s2++) { const yy = Math.round(top + s2 / HIST_S * (h - top)) + 0.5; cx.globalAlpha = 0.35; cx.beginPath(); cx.moveTo(pad, yy); cx.lineTo(w - pad, yy); cx.stroke(); }
+    cx.globalAlpha = 1;
+    // línea central
+    const cl = cx.createLinearGradient(0, top, 0, h);
+    cl.addColorStop(0, C.ok + 'cc'); cl.addColorStop(1, C.ok + '00');
+    cx.strokeStyle = cl; cx.lineWidth = 1.5 * dpr;
+    cx.beginPath(); cx.moveTo(mid, top); cx.lineTo(mid, h); cx.stroke();
+    // marcas arriba
+    cx.fillStyle = C.muted; cx.font = `600 ${16 * dpr}px system-ui, -apple-system, sans-serif`; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    cx.fillText('♭', X(-50), top - 20 * dpr); cx.fillText('♯', X(50), top - 20 * dpr);
+    for (let c = -50; c <= 50; c += 5) {
+      const big = c % 25 === 0, xx = Math.round(X(c)) + 0.5;
+      cx.strokeStyle = c === 0 ? C.text : big ? C.muted : C.line; cx.lineWidth = (c === 0 ? 2 : 1) * dpr;
+      cx.beginPath(); cx.moveTo(xx, top - (big ? 9 : 5) * dpr); cx.lineTo(xx, top); cx.stroke();
+    }
+    // traza: segmentos finos, del color del estado, que se desvanecen con el tiempo
+    cx.lineWidth = 2.2 * dpr; cx.lineCap = 'round'; cx.lineJoin = 'round';
+    for (let i = hist.length - 1; i > 0; i--) {
+      const a = hist[i], b = hist[i - 1];
+      if (a.c == null || b.c == null || a.n !== b.n || Math.abs(a.c - b.c) > 30) continue;
+      const age = (t - a.t) / HIST_S; if (age > 1) break;
+      cx.globalAlpha = Math.max(0, 1 - age) ** 1.3;
+      cx.strokeStyle = colorFor(a.c);
+      cx.beginPath(); cx.moveTo(X(a.c), Y(a.t)); cx.lineTo(X(b.c), Y(b.t)); cx.stroke();
+    }
+    cx.globalAlpha = 1;
+    // burbuja con la nota (sigue a la aguja amortiguada)
+    const active = curCents != null;
+    const bx = X(active ? needle : 0), by = top, r = 15 * dpr;
+    const col = active ? stateColor() : C.line;
+    if (active) {
+      const sg = cx.createLinearGradient(0, by, 0, by + 60 * dpr); sg.addColorStop(0, col + 'aa'); sg.addColorStop(1, col + '00');
+      cx.strokeStyle = sg; cx.lineWidth = 2 * dpr; cx.beginPath(); cx.moveTo(bx, by); cx.lineTo(bx, by + 60 * dpr); cx.stroke();
+      cx.shadowColor = col; cx.shadowBlur = (uiState.startsWith('ok') ? 18 : 8) * dpr;
+    }
+    cx.fillStyle = C.panel; cx.beginPath(); cx.arc(bx, by, r, 0, Math.PI * 2); cx.fill();
+    cx.shadowBlur = 0;
+    cx.strokeStyle = col; cx.lineWidth = 2 * dpr; cx.beginPath(); cx.arc(bx, by, r, 0, Math.PI * 2); cx.stroke();
+    cx.fillStyle = active ? C.text : C.muted; cx.font = `700 ${(curNote.length > 1 ? 12 : 14) * dpr}px system-ui, -apple-system, sans-serif`;
+    cx.fillText(active ? curNote : '·', bx, by + 0.5 * dpr);
+  }
+  const laneIdle = () => requestAnimationFrame(() => laneDraw(performance.now() / 1000));
+  window.addEventListener('resize', () => { if (!stream) laneIdle(); });
+  matchMedia('(prefers-color-scheme: light)').addEventListener?.('change', () => { laneCol = null; laneIdle(); });
   const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
   const disp = $('display');
@@ -290,7 +338,7 @@
     const cr = Math.round(c * 10) / 10 || 0;
     setText('cents', showDiag ? (cr > 0 ? '+' : '') + cr.toFixed(1) + ' cents · ' + freq.toFixed(2) + ' Hz' : (Math.round(c) > 0 ? '+' : '') + Math.round(c));
     needleTarget = clamp(c, -50, 50);
-    curCents = c;
+    curCents = c; curNote = noteName(target);
 
     const st = nextState(uiState, c);
     // Solo símbolos: ✓ afinada · ▲ subir · ▼ bajar · doble flecha = lejos (con la nota a la que hay que llegar)
@@ -301,6 +349,7 @@
     setText('status', msg);
     uiState = st + (fresh ? '' : ' hold');
     setState(uiState);
+    if (st === 'ok' && idx >= 0) { const now = performance.now(); if (okIdx !== idx) { okIdx = idx; okSince = now; } else if (now - okSince > 600) tuned.add(idx); } else okIdx = -1;
     markStrings(idx, st === 'ok');
     showTarget(idx);
   }
@@ -336,7 +385,6 @@
     const acc = k * (needleTarget - needle) - d * needleV;
     needleV += acc * dt; needle += needleV * dt;
     if (Math.abs(needleTarget - needle) < 0.05 && Math.abs(needleV) < 0.05) { needle = needleTarget; needleV = 0; }
-    $('needle').style.left = (50 + needle) + '%';
   }
 
   let lastFrame = 0;
@@ -344,6 +392,7 @@
     raf = requestAnimationFrame(loop);
     const dt = Math.min(0.05, (ts - (lastFrame || ts)) / 1000); lastFrame = ts;
     animateNeedle(dt);
+    laneDraw(ts / 1000);
     if (ts - lastRun < 30) return;
     lastRun = ts;
     analyser.getFloatTimeDomainData(buf);
@@ -359,7 +408,7 @@
     $('level').classList.toggle('open', tracker.gateOpen);
     if (out) { show(out.freq, out.fresh); lastFresh = out.fresh; }
     else if (uiState !== 'idle') idle('');
-    histPush(ts / 1000); histDraw(ts / 1000);
+    histPush(ts / 1000);
 
     if (showDiag) {
       setText('diag', 'entrada ' + db.toFixed(0) + ' dB · fondo ' + tracker.floorDb.toFixed(0) + ' dB · puerta ' + (tracker.gateOpen ? 'abierta' : 'cerrada') + ' · claridad ' + r.clarity.toFixed(2) +
@@ -422,7 +471,7 @@
     $('micBtn').textContent = 'Empezar a afinar';
     $('micBtn').classList.remove('on');
     $('level').style.width = '0';
-    idle('Micrófono en pausa');
+    idle('Micrófono en pausa'); hist.length = 0; laneIdle();
     setSession('playback');
     keepAwake(playing);
   }
@@ -589,6 +638,7 @@
 
   setBpm(bpm); setVol(vol); renderBeats();
   renderStrings();
+  laneIdle();
 
   // ================= ESCALAS =================
   function tone(ac, f, t, dur, vol) {
