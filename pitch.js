@@ -248,7 +248,7 @@
     const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
     let lock = 0, buf = [], cand = [], alt = [], far = [], farT = 0, prevLock = 0, lastAccept = -1e9, lastOnset = -1e9, env = 0, newPluck = false;
     let floorHist = [], floorDb = -75, peakDb = -75, open = false, openSince = 0;
-    let earlyLock = false, expectF = 0, ev = null, evId = 0, t0 = -1, lastT = -1, dtE = 0.03; const recentDb = [];
+    let lastDb = -75, softOpen = false, earlyLock = false, expectF = 0, ev = null, evId = 0, t0 = -1, lastT = -1, dtE = 0.03; const recentDb = [];
     // Cuántas lecturas equivalen a 'sec' segundos (el teléfono puede procesar a otro ritmo)
     const nFor = (sec) => Math.max(3, Math.round(sec / dtE));
 
@@ -262,7 +262,7 @@
     // (golpes de bajo de la música del vecino, carros…): solo abre una cuerda tocada cerca.
     function threshold() {
       // Los picos del ambiente solo cuentan con historia suficiente (~1,5 s); antes, solo el ruido de fondo
-      if (floorHist.length < nFor(1.5)) return floorDb + o.gateDb;
+      if (floorHist.length < nFor(1.5)) return floorDb + o.gateDb + 2;
       return Math.max(floorDb + o.gateDb, Math.min(peakDb + (o.peakMargin == null ? 3 : o.peakMargin), floorDb + (o.cap || 12)));
     }
     function pushFloor(db, id) {
@@ -283,6 +283,8 @@
       get lockFreq() { return lock; },
       setGate(db) { o.gateDb = db; },
       // Púa nueva detectada por fuera (flujo espectral): olvidar la cuerda anterior y fijarse en la nueva
+      // Púa suave detectada por el espectro (también en graves) con la puerta cerrada: candidata para la vía lenta
+      softOnset(t, f) { if (!open && (!ev || t - ev.start > 0.25)) { ev = { id: ++evId, start: t, peak: lastDb, f: [], exp: f }; } },
       hint(t, drop, expect) { lastOnset = t; newPluck = true; expectF = expect || 0; cand = []; alt = []; far = []; if (drop && lock) { prevLock = lock; lock = 0; buf = []; } },
       reset() { prevLock = 0; lock = 0; buf = []; cand = []; alt = []; far = []; lastAccept = -1e9; newPluck = false; floorHist = []; floorDb = -75; peakDb = -75; open = false; ev = null; t0 = -1; recentDb.length = 0; },
       // r = { freq, clarity, rms }, t en segundos. Devuelve { freq, fresh } o null.
@@ -292,7 +294,7 @@
         if (lastT >= 0 && t > lastT) dtE = dtE * 0.9 + Math.min(0.15, Math.max(0.01, t - lastT)) * 0.1;
         lastT = t;
         const lv = r.level != null ? r.level : r.rms;
-        const db = 20 * Math.log10(lv + 1e-9);
+        const db = 20 * Math.log10(lv + 1e-9); lastDb = db;
         // Una púa cerca del micrófono es brillante: en el ataque la banda media pesa casi tanto como todo el sonido.
         // Un bajo lejano (o a través de la pared) es casi solo graves.
         const bright = r.level == null || 20 * Math.log10((r.level + 1e-9) / (r.rms + 1e-9)) >= (o.minRel == null ? -10 : o.minRel);
@@ -306,7 +308,7 @@
         if (t0 < 0) t0 = t;
         if ((floorHist.length < 4 || t - t0 < 0.3) && !ev) { open = false; if (attack) ev = { id: ++evId, start: t, peak: db, f: [] }; else pushFloor(db); }
         else if (!open) {
-          if (db > threshold() && bright) { open = true; openSince = t; lastOnset = t; newPluck = true; cand = []; ev = null; }
+          if (db > threshold() && bright) { softOpen = false; open = true; openSince = t; lastOnset = t; newPluck = true; cand = []; ev = null; }
           else {
             // Vía lenta: una cuerda tocada suave (por debajo del umbral) se reconoce porque, tras su ataque,
             // mantiene la MISMA nota y se va apagando poco a poco. La música cambia de nota; el ruido no tiene nota.
@@ -319,7 +321,10 @@
                 const m = med(fs);
                 const stable = fs.filter(f => Math.abs(c(f, m)) < 25).length >= fs.length - 2;
                 const decaying = db < ev.peak - 1.5;
-                if (stable && decaying) {
+                // (si vino del espectro, la nota tiene que ser la cuerda que se oyó al pulsar)
+                const mp = ev.exp ? (prior ? prior(m) : m) : m, fitsExp = !ev.exp || (mp > 0 && Math.abs(c(mp, ev.exp)) < 80);
+                if (stable && decaying && fitsExp) {
+                  softOpen = !!ev.exp;
                   open = true; openSince = t; lastOnset = ev.start; newPluck = true; cand = [];
                   floorHist = floorHist.filter(h => h.id !== ev.id); recalc(); // no era ambiente
                   ev = null;
@@ -330,7 +335,7 @@
             if (!open) pushFloor(db, ev ? ev.id : 0);
           }
         } else {
-          if (db < floorDb + Math.max(0, o.gateDb - (o.closeDrop || 5))) open = false;
+          if (db < floorDb + (softOpen ? 0.5 : Math.max(0, o.gateDb - (o.closeDrop || 5)))) open = false;
           // Una cuerda se apaga en pocos segundos; un sonido que sigue fuerte más de 5 s es ambiente
           else if (t - openSince > 5) { open = false; pushFloor(db); }
         }
@@ -341,7 +346,7 @@
 
         const inAttack = t - lastOnset < o.attack;
         // Solo se usan lecturas con la cuerda claramente por encima del fondo (si no, el fondo contamina la medida)
-        const strong = o.gateDb <= 0 || db > floorDb + o.gateDb - (o.strongDrop || 3);
+        const strong = o.gateDb <= 0 || db > floorDb + (softOpen ? 1 : o.gateDb - (o.strongDrop || 3));
         let f = (open && strong && !inAttack && r.freq > 0 && r.clarity >= minClarity) ? r.freq : 0;
         // Púa ya identificada (se sabe qué cuerda es): si la lectura cae en esa cuerda, sirve desde ya (respuesta rápida)
         let fast = false;
@@ -478,6 +483,19 @@
                   if (u >= (o.lowRatio || 0.57) * own) low = j;
                 });
                 if (low !== bi) { bi = low; second = 0; bs = Math.max(bs, o.minScore || 8) + 1; out.viaLow = true; }
+                // Al revés: ganó una grave solo por los armónicos que comparte con una aguda (1.ª E♭4 = 4.º de la 6.ª,
+                // 3.º de la 5.ª). Si los armónicos propios de la grave casi no aparecen, la púa fue la aguda.
+                else {
+                  const own0 = meanOf(strings[bi], 0); let up = -1, upS = 0;
+                  strings.forEach((f, j) => {
+                    if (f <= strings[bi]) return;
+                    const k = Math.round(f / strings[bi]);
+                    if (k < 2 || k > 4 || Math.abs(f / strings[bi] / k - 1) > 0.03) return;
+                    const u = meanOf(strings[bi], k), oh = meanOf(f, 0);
+                    if (u < (o.highRatio ?? 0.65) * oh && oh > upS) { up = j; upS = oh; }
+                  });
+                  if (up >= 0) { bi = up; second = 0; bs = Math.max(bs, o.minScore || 8) + 1; out.viaHigh = true; }
+                }
               }
               out.idx = (ext ? bs > 12 && bs > second * 1.03 : bs > (o.minScore || 8) && bs > second * o.margin) ? bi : -1;
               // Dudosa: las cuerdas graves tardan más en aparecer en el espectro. Se sigue acumulando un poco más.
@@ -515,7 +533,7 @@
       const l2 = Math.max(1, Math.floor(f * 0.85 / binHz)), h2 = Math.min(amb.length - 1, Math.ceil(f * 1.15 / binHz));
       const nb = []; for (let k = l2; k <= h2; k++) if (k < lo || k > hi) nb.push(amb[k]);
       nb.sort((x, y) => x - y); const loc = nb.length ? nb[nb.length >> 1] : ambMed;
-      return a > 6 * ambMed && a > (o.ambLocal || 0) * loc && cur < 2.5 * a;
+      return a > 6 * ambMed && a > (o.ambLocal ?? 2) * loc && cur < 2.5 * a;
     }
     return {
       tracker,
@@ -526,7 +544,13 @@
         if (S.length && r.spec) {
           // La púa puede llegar un bloque antes de que abra la puerta: se detecta siempre y se usa solo si la puerta está abierta
           const on = onset.update(r.spec, t, r.binHz, S, true);
-          if (!tracker.gateOpen && on.score != null) { on.idx = -1; on.score = null; }
+          if (!tracker.gateOpen && on.score != null) {
+            // Puerta cerrada: puede ser una púa suave (la 6.ª casi no sube la banda media). Se pasa a la vía lenta,
+            // que solo abre si después la MISMA cuerda se mantiene estable.
+            if (on.idx >= 0 && L < 0) tracker.softOnset(t, S[on.idx]);
+            else if (L >= 0) tracker.softOnset(t, S[L]);
+            on.idx = -1; on.score = null;
+          }
           // Empate entre dos cuerdas: se mira cuál de las dos suena de verdad cerca de su nota
           if (L < 0 && on.idx === -1 && on.score > 8 && on.top && on.top[1] >= 0 && r.near) {
             let ok = on.top.filter(i => r.near(S[i], 60) > 0);
@@ -536,6 +560,12 @@
               ok = S.map((f, i) => i).filter(i => !(lf && Math.abs(c(lf, S[i])) < 100) && r.near(S[i], 60) > 0);
             }
             if (ok.length === 1) on.idx = ok[0];
+          }
+          // Púa dudosa que señala una cuerda grave cuyo armónico es justo la cuerda que sigue sonando clara:
+          // suele ser un golpe o ruido sobre esa cuerda, no una púa nueva. Se ignora.
+          if (L < 0 && on.idx >= 0 && on.score < 12) {
+            const lf = tracker.lockFreq, k = lf > 0 ? Math.round(lf / S[on.idx]) : 0, fr = r.freq > 0 ? (prior ? prior(r.freq) || r.freq : r.freq) : 0;
+            if (k >= 2 && k <= 4 && Math.abs(c(S[on.idx] * k, lf)) < 40 && fr && Math.abs(c(fr, lf)) < 40 && r.clarity >= 0.8) { on.idx = -1; on.score = null; }
           }
           if (L < 0 && on.idx >= 0) {
             const same = on.idx === focus && t < focusUntil;
@@ -575,8 +605,8 @@
         const fi = L >= 0 ? L : (t < focusUntil ? focus : -1);
         let rr = r;
         if (fi >= 0 && r.near && r.rms > 0) {
-          const nom = S[fi];
           const f = r.freq > 0 ? (prior ? prior(r.freq) : r.freq) : 0;
+          const nom = S[fi];
           const fits = f > 0 && !r.cands && Math.abs(c(f, nom)) < (L >= 0 ? 400 : 150);
           // En automático solo se fuerza la cuerda elegida si lo que oye el detector es la cuerda ANTERIOR
           // (que sigue vibrando) o una mezcla; si oye claramente otra cuerda distinta, se le hace caso.
