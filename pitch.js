@@ -35,6 +35,10 @@
     const fft = makeFFT(M);
     const re = new Float64Array(M), im = new Float64Array(M), nsdf = new Float64Array(N);
     const x = new Float64Array(N);
+    // Para el refinado espectral (ventana de Hann)
+    const hann = new Float64Array(N); for (let i = 0; i < N; i++) hann[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1));
+    const sre = new Float64Array(M), sim = new Float64Array(M);
+    const mag = (k) => Math.log(Math.hypot(sre[k], sim[k]) + 1e-12);
     const tauMin = Math.max(2, Math.floor(sampleRate / o.maxF));
     const tauMax = Math.min(Math.floor(N * 0.7), Math.ceil(sampleRate / o.minF));
 
@@ -96,22 +100,52 @@
       const den = a - 2 * b + c;
       let shift = 0, peakV = b;
       if (den < 0) { shift = 0.5 * (a - c) / den; peakV = b - 0.25 * (a - c) * shift; }
-      return { freq: sampleRate / (tau + shift), clarity: Math.min(1, peakV), rms };
+      let freq = sampleRate / (tau + shift);
+
+      // Refinado espectral: en cuerdas de acero los armónicos altos suenan algo agudos (inarmonicidad) y
+      // la periodicidad global sale unos cents alta. Medimos el pico del armónico más bajo que tenga fuerza
+      // (fundamental o, si el micrófono del móvil la atenúa, el 2.º) y dividimos por su número.
+      if (o.refine !== false) {
+        sre.fill(0); sim.fill(0);
+        for (let i = 0; i < N; i++) sre[i] = x[i] * hann[i];
+        fft(sre, sim, false);
+        const binHz = sampleRate / M;
+        const peakNear = (fk) => {
+          const lo = Math.max(2, Math.floor(fk * 0.97 / binHz)), hi = Math.min(M / 2 - 2, Math.ceil(fk * 1.03 / binHz));
+          let b = lo; for (let k = lo; k <= hi; k++) if (mag(k) > mag(b)) b = k;
+          if (b === lo || b === hi) return null;
+          const a1 = mag(b - 1), a2 = mag(b), a3 = mag(b + 1), d = a1 - 2 * a2 + a3;
+          const off = d < 0 ? 0.5 * (a1 - a3) / d : 0;
+          return { f: (b + off) * binHz, m: a2 };
+        };
+        // Por debajo de ~90 Hz los filtros (y el micrófono del móvil) deforman el pico: se usa un armónico superior
+        let parts = [1, 2, 3, 4].filter(k => freq * k >= 90).slice(0, 3).map(k => ({ k, p: peakNear(freq * k) })).filter(q => q.p);
+        if (parts.length) {
+          const best = Math.max(...parts.map(q => q.p.m));
+          const use = parts.find(q => q.p.m >= best - Math.log(6)); // el más bajo dentro de ~15 dB del más fuerte
+          const fr = use.p.f / use.k;
+          if (Math.abs(1200 * Math.log2(fr / freq)) < 25) freq = fr;
+        }
+      }
+      return { freq, clarity: Math.min(1, peakV), rms };
     };
   }
 
   /* Seguimiento estable de la nota a partir de las lecturas del detector.
+   * - Puerta de ruido adaptativa: mide el ruido de fondo (música, tráfico, ambiente) y solo escucha
+   *   cuando el sonido supera ese fondo en `gateDb` decibelios, es decir, cuando tocas una cuerda cerca.
    * - Detecta el ataque de cada cuerda y descarta sus primeros ~150 ms (la púa desafina un instante).
-   * - Se fija en una nota cuando 3 lecturas coinciden y a partir de ahí ignora lecturas sueltas,
-   *   armónicos (saltos de octava) y cuerdas que vibran por simpatía.
-   * - La frecuencia mostrada es la media recortada de los últimos ~0,6 s: precisión de décimas de cent.
-   * - Mantiene la última lectura mientras la cuerda se apaga.
+   * - Se fija en una nota cuando 3 lecturas coinciden; ignora lecturas sueltas y armónicos.
+   * - `prior(f)` permite corregir u omitir lecturas (p. ej. elegir la octava de una cuerda de la afinación).
+   * - La frecuencia mostrada es la media recortada de los últimos ~0,45 s.
    */
   function createTracker(o) {
-    o = Object.assign({ attack: 0.15, window: 0.45, keep: 4, tol: 35 }, o || {});
+    o = Object.assign({ attack: 0.15, window: 0.45, keep: 3, tol: 35, gateDb: 8 }, o || {});
     const c = (a, b) => 1200 * Math.log2(a / b);
     const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
-    let lock = 0, buf = [], cand = [], alt = [], lastAccept = -1e9, lastOnset = -1e9, env = 0, floor = 1, newPluck = false;
+    let lock = 0, buf = [], cand = [], alt = [], lastAccept = -1e9, lastOnset = -1e9, env = 0, newPluck = false;
+    let floorHist = [], floorDb = -75, peakDb = -75, open = false, openSince = 0;
+    let ev = null, evId = 0; const recentDb = [];
 
     function trimmed() {
       const s = buf.map(b => b.f).sort((x, y) => x - y);
@@ -119,35 +153,92 @@
       return part.reduce((a, b) => a + b, 0) / part.length;
     }
     function relock(arr, t) { lock = med(arr); buf = arr.map(f => ({ f, t })); cand = []; alt = []; newPluck = false; }
+    // Umbral de apertura: por encima del ruido de fondo Y por encima de los picos del ambiente
+    // (golpes de bajo de la música del vecino, carros…): solo abre una cuerda tocada cerca.
+    function threshold() { return Math.max(floorDb + o.gateDb, Math.min(peakDb + 5, floorDb + 18)); }
+    function pushFloor(db, id) {
+      floorHist.push({ db, id: id || 0 }); if (floorHist.length > (o.hist || 200)) floorHist.shift();
+      recalc();
+    }
+    function recalc() {
+      if (!floorHist.length) return;
+      const s = floorHist.map(h => h.db).sort((x, y) => x - y);
+      floorDb = s[Math.floor(s.length * (o.pct || 0.1))];
+      peakDb = s[Math.floor(s.length * 0.95)];
+    }
 
     return {
-      reset() { lock = 0; buf = []; cand = []; alt = []; lastAccept = -1e9; newPluck = false; },
+      get floorDb() { return floorDb; },
+      get thresholdDb() { return threshold(); },
+      get gateOpen() { return open; },
+      setGate(db) { o.gateDb = db; },
+      reset() { lock = 0; buf = []; cand = []; alt = []; lastAccept = -1e9; newPluck = false; floorHist = []; floorDb = -75; peakDb = -75; open = false; ev = null; recentDb.length = 0; },
       // r = { freq, clarity, rms }, t en segundos. Devuelve { freq, fresh } o null.
-      update(r, t, minClarity) {
-        // Ataque: subida brusca de volumen
-        if (r.rms > Math.max(env * 1.5, floor * 2.5) && t - lastOnset > 0.2) { lastOnset = t; newPluck = true; cand = []; }
+      update(r, t, minClarity, prior) {
+        const db = 20 * Math.log10(r.rms + 1e-9);
+        // ---- Puerta de ruido ----
+        // Ataque (subida brusca respecto a los últimos fotogramas)
+        const prevMin = recentDb.length ? Math.min(...recentDb) : db;
+        const attack = db - prevMin >= 6;
+        recentDb.push(db); if (recentDb.length > 5) recentDb.shift();
+
+        // Los primeros ~0,3 s solo se mide el ambiente
+        if (floorHist.length < 10 && !ev) { pushFloor(db); open = false; if (attack) ev = { id: ++evId, start: t, peak: db, f: [] }; }
+        else if (!open) {
+          if (db > threshold()) { open = true; openSince = t; lastOnset = t; newPluck = true; cand = []; ev = null; }
+          else {
+            // Vía lenta: una cuerda tocada suave (por debajo del umbral) se reconoce porque, tras su ataque,
+            // mantiene la MISMA nota y se va apagando poco a poco. La música cambia de nota; el ruido no tiene nota.
+            if (attack && (!ev || t - ev.start > 0.25)) ev = { id: ++evId, start: t, peak: db, f: [] };
+            if (ev) {
+              ev.peak = Math.max(ev.peak, db);
+              if (t - ev.start > o.attack && r.freq > 0 && r.clarity >= minClarity) ev.f.push(r.freq);
+              const fs = ev.f.slice(-16);
+              if (t - ev.start >= 0.6 && fs.length >= 12) {
+                const m = med(fs);
+                const stable = fs.filter(f => Math.abs(c(f, m)) < 25).length >= fs.length - 2;
+                const decaying = db < ev.peak - 1.5;
+                if (stable && decaying) {
+                  open = true; openSince = t; lastOnset = ev.start; newPluck = true; cand = [];
+                  floorHist = floorHist.filter(h => h.id !== ev.id); recalc(); // no era ambiente
+                  ev = null;
+                }
+              }
+              if (ev && t - ev.start > 2.5) ev = null;
+            }
+            if (!open) pushFloor(db, ev ? ev.id : 0);
+          }
+        } else {
+          if (db < floorDb + Math.max(0, o.gateDb - (o.closeDrop || 5))) open = false;
+          // Una cuerda se apaga en pocos segundos; un sonido que sigue fuerte más de 5 s es ambiente
+          else if (t - openSince > 5) { open = false; pushFloor(db); }
+        }
+        if (o.gateDb <= 0) open = true;
+        // Nuevo ataque con la puerta ya abierta (cuerda tras cuerda)
+        if (open && r.rms > env * 1.6 && env > 0 && t - lastOnset > 0.2) { lastOnset = t; newPluck = true; cand = []; }
         env = env * 0.6 + r.rms * 0.4;
-        floor = Math.min(floor * 1.01 + 1e-7, Math.max(r.rms, 1e-6));
 
         const inAttack = t - lastOnset < o.attack;
-        if (!inAttack && r.freq > 0 && r.clarity >= minClarity) {
-          let f = r.freq;
+        // Solo se usan lecturas con la cuerda claramente por encima del fondo (si no, el fondo contamina la medida)
+        const strong = o.gateDb <= 0 || db > floorDb + o.gateDb - (o.strongDrop || 3);
+        let f = (open && strong && !inAttack && r.freq > 0 && r.clarity >= minClarity) ? r.freq : 0;
+        if (f && prior) f = prior(f, lock) || 0;
+        if (f) {
           if (!lock || newPluck) {
-            // Nota nueva: fijarse solo cuando 3 lecturas seguidas coinciden
             cand.push(f); if (cand.length > 3) cand.shift();
             if (cand.length === 3 && Math.abs(c(Math.max(...cand), Math.min(...cand))) < 25) relock(cand, t);
           } else if (Math.abs(c(f, lock)) <= o.tol) {
             buf.push({ f, t }); alt = [];
             while (buf.length > 3 && t - buf[0].t > o.window) buf.shift();
             lock = trimmed();
-          } else {
-            // Lectura lejana: solo cambia si se repite de forma consistente (p. ej. al girar la clavija rápido)
-            // Una octava o quinta exacta de la nota fijada sin ataque nuevo es un armónico, no otra cuerda
+          } else if (Math.abs(c(f, lock)) <= 150) {
+            // Cambio moderado y consistente sin ataque nuevo = estás girando la clavija con la cuerda sonando.
+            // Lo que esté más lejos sin un ataque nuevo (música, otra fuente, armónicos) se ignora.
             let harmonic = false;
             for (const k of [2, 0.5, 3, 1 / 3, 4, 0.25]) if (Math.abs(c(f / k, lock)) < 40) harmonic = true;
-            if (harmonic) { lastAccept = t; return { freq: lock, fresh: true }; }
-            alt.push(f); if (alt.length > 6) alt.shift();
-            if (alt.length === 6 && Math.abs(c(Math.max(...alt), Math.min(...alt))) < 25) relock(alt, t);
+            const need = harmonic ? 12 : 6;
+            alt.push(f); if (alt.length > need) alt.shift();
+            if (alt.length === need && Math.abs(c(Math.max(...alt), Math.min(...alt))) < 25) relock(alt, t);
           }
           lastAccept = t;
         }

@@ -33,12 +33,12 @@
 
     <div class="display idle" id="display">
       <div class="dir">
-        <div class="arrow flat"><span class="tri">▲</span><span>SUBE</span></div>
+        <div class="arrow flat"><span class="tri">▲</span></div>
         <div class="noteBox">
           <div class="note"><span id="note">–</span><sub id="octave"></sub></div>
           <div class="target" id="target"></div>
         </div>
-        <div class="arrow sharp"><span class="tri">▼</span><span>BAJA</span></div>
+        <div class="arrow sharp"><span class="tri">▼</span></div>
       </div>
 
       <div class="gauge" aria-hidden="true">
@@ -49,7 +49,7 @@
 
       <div class="status" id="status">Toca «Empezar a afinar»</div>
       <div class="cents" id="cents"></div>
-      <div class="level" aria-hidden="true"><div id="level"></div></div>
+      <div class="level" aria-hidden="true"><div id="level"></div><i id="gateMark"></i></div>
       <div class="diag" id="diag" hidden></div>
     </div>
 
@@ -61,13 +61,6 @@
     <dialog id="calDlg">
       <div class="dlg">
         <h3>Ajustes</h3>
-        <h4>Sensibilidad</h4>
-        <div class="seg" id="sensSeg">
-          <button type="button" data-v="normal">Normal</button>
-          <button type="button" data-v="alta">Alta</button>
-          <button type="button" data-v="max">Máxima</button>
-        </div>
-        <p class="muted">Alta: guitarra eléctrica sin enchufar con el teléfono cerca. Normal: ignora más el ruido. Máxima: lugares muy silenciosos.</p>
         <h4>Referencia del La (A4)</h4>
         <div class="stepper">
           <button type="button" id="a4down" aria-label="Bajar">−</button>

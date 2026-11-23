@@ -50,17 +50,18 @@
   let a4 = clamp(Number(store.get('a4', 440)) || 440, 415, 466);
   const midiToFreq = (m) => a4 * Math.pow(2, (m - 69) / 12);
   const freqToMidi = (f) => 69 + 12 * Math.log2(f / a4);
-  const noteName = (m) => NAMES[((m % 12) + 12) % 12];
+  const FLATS = ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'G♭', 'G', 'A♭', 'A', 'B♭', 'B'];
+  const noteName = (m) => ((tuning && tuning.flats) ? FLATS : NAMES)[((m % 12) + 12) % 12];
   const octaveOf = (m) => Math.floor(m / 12) - 1;
 
   const TUNINGS = [
     { id: 'e',      group: '',                 name: 'Estándar (E A D G B E)',        notes: [40, 45, 50, 55, 59, 64] },
     { id: 'dropd',  group: 'Variaciones',      name: 'Drop D (D A D G B E)',          notes: [38, 45, 50, 55, 59, 64] },
-    { id: 'eb',     group: 'Variaciones',      name: 'E♭ (medio tono abajo)',          notes: [39, 44, 49, 54, 58, 63] },
+    { id: 'eb',     group: 'Variaciones',      name: 'E♭ (medio tono abajo)',          notes: [39, 44, 49, 54, 58, 63], flats: true },
     { id: 'dropcs', group: 'Variaciones',      name: 'Drop C♯ (C♯ G♯ C♯ F♯ A♯ D♯)',   notes: [37, 44, 49, 54, 58, 63] },
     { id: 'd',      group: 'Variaciones',      name: 'D estándar (D G C F A D)',      notes: [38, 43, 48, 53, 57, 62] },
     { id: 'dropc',  group: 'Variaciones',      name: 'Drop C (C G C F A D)',          notes: [36, 43, 48, 53, 57, 62] },
-    { id: 'c',      group: 'Variaciones',      name: 'C estándar (C F A♯ D♯ G C)',    notes: [36, 41, 46, 51, 55, 60] },
+    { id: 'c',      group: 'Variaciones',      name: 'C estándar (C F B♭ E♭ G C)',    notes: [36, 41, 46, 51, 55, 60], flats: true },
     { id: 'dropb',  group: 'Variaciones',      name: 'Drop B (B F♯ B E G♯ C♯)',       notes: [35, 42, 47, 52, 56, 61] },
     { id: '7b',     group: '7 cuerdas',        name: '7 cuerdas (B E A D G B E)',     notes: [35, 40, 45, 50, 55, 59, 64] },
     { id: '7a',     group: '7 cuerdas',        name: '7 cuerdas Drop A',              notes: [33, 40, 45, 50, 55, 59, 64] },
@@ -109,7 +110,7 @@
     if (!tuning.notes.length) { $('target').textContent = 'Modo cromático'; return; }
     if (idx < 0) { $('target').textContent = 'Toca cualquier cuerda'; return; }
     const m = tuning.notes[idx];
-    $('target').textContent = (tuning.notes.length - idx) + 'ª cuerda · ' + midiToFreq(m).toFixed(1) + ' Hz' + (idx === locked ? ' · fijada' : '');
+    $('target').textContent = 'Objetivo: ' + noteName(m) + octaveOf(m) + ' · ' + (tuning.notes.length - idx) + 'ª cuerda · ' + midiToFreq(m).toFixed(1) + ' Hz' + (idx === locked ? ' · fijada' : '');
   }
   function markStrings(idx, ok) {
     const kids = $('strings').children;
@@ -134,18 +135,15 @@
   })();
 
   // ---------- Ajustes ----------
-  // clarity: cuán periódica debe ser la señal (1 = tono puro). Más bajo = más sensible.
-  const SENS = { normal: 0.7, alta: 0.55, max: 0.45 };
-  let sens = SENS[store.get('sens', 'alta')] ? store.get('sens', 'alta') : 'alta';
+  // Claridad mínima de la señal (1 = tono puro). Fija: la puerta de ruido adaptativa hace el resto.
+  const MIN_CLARITY = 0.5;
   let showDiag = !!store.get('diag', false);
   function setA4(v) { a4 = clamp(v, 415, 466); $('a4').textContent = a4 + ' Hz'; store.set('a4', a4); showTarget(locked); }
-  function setSens(v) { sens = v; store.set('sens', v); for (const b of $('sensSeg').children) b.classList.toggle('on', b.dataset.v === v); }
   function setDiag(v) { showDiag = v; store.set('diag', v); $('diagChk').checked = v; $('diag').hidden = !v; }
-  setA4(a4); setSens(sens); setDiag(showDiag);
+  setA4(a4); setDiag(showDiag);
   $('a4down').addEventListener('click', () => setA4(a4 - 1));
   $('a4up').addEventListener('click', () => setA4(a4 + 1));
   $('a4reset').addEventListener('click', () => setA4(440));
-  for (const b of $('sensSeg').children) b.addEventListener('click', () => setSens(b.dataset.v));
   $('diagChk').addEventListener('change', (e) => setDiag(e.target.checked));
   $('calBtn').addEventListener('click', () => $('calDlg').showModal());
   $('calClose').addEventListener('click', () => $('calDlg').close());
@@ -168,10 +166,10 @@
 
   // ---------- Detección ----------
   let stream = null, source = null, analyser = null, chain = [], buf = null, detect = null, raf = 0, lastRun = 0, micInfo = '';
-  const tracker = window.Pitch.createTracker();
-  let lastKey = '', displayIdx = -1, uiState = 'idle', needle = 0, needleV = 0, needleTarget = 0, lastFresh = 0, t0 = performance.now();
+  const tracker = window.Pitch.createTracker({ gateDb: 8 });
+  let lastKey = '', playedKey = '', displayIdx = -1, uiState = 'idle', needle = 0, needleV = 0, needleTarget = 0, lastFresh = 0, t0 = performance.now();
 
-  function resetTrack() { tracker.reset(); lastKey = ''; }
+  function resetTrack() { tracker.reset(); lastKey = ''; playedKey = ''; }
   const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
   const disp = $('display');
@@ -223,34 +221,41 @@
     displayIdx = idx;
     lastKey = String(target);
     const c = (mf - target) * 100, ac = Math.abs(c);
+    // La nota grande es SIEMPRE la que realmente suena (con histéresis para que no parpadee)
+    const pk = Number(playedKey);
+    const played = (playedKey !== '' && Math.abs(mf - pk) < 0.65) ? pk : Math.round(mf);
+    playedKey = String(played);
 
-    setText('note', noteName(target));
-    setText('octave', String(octaveOf(target)));
+    setText('note', noteName(played));
+    setText('octave', String(octaveOf(played)));
     const cr = Math.round(c * 10) / 10 || 0;
     setText('cents', (cr > 0 ? '+' : '') + cr.toFixed(1) + ' cents · ' + freq.toFixed(2) + ' Hz');
     needleTarget = clamp(c, -50, 50);
 
     const st = nextState(uiState, c);
-    if (st !== uiState.replace(' hold', '') || !uiState) {
-      let msg;
-      if (st === 'ok') msg = '✓ Afinada';
-      else if (ac >= 60) {
-        const flat = c < 0, semis = Math.round(ac / 100), m = Math.round(mf);
-        msg = (flat ? '▲ Sube ' : '▼ Baja ') + (semis >= 1 ? semis + (semis === 1 ? ' semitono' : ' semitonos') : 'un poco') + ' (suena ' + noteName(m) + octaveOf(m) + ')';
-        if (!flat) msg = '⚠ ' + msg + ': ¡no subas más!';
-      } else msg = c < 0 ? '▲ Sube: aprieta la clavija' : '▼ Baja: afloja la clavija';
-      setText('status', msg);
-    } else if (ac >= 60) {
-      // el número de semitonos puede cambiar sin cambiar de estado
-      const flat = c < 0, semis = Math.round(ac / 100), m = Math.round(mf);
-      let msg = (flat ? '▲ Sube ' : '▼ Baja ') + (semis >= 1 ? semis + (semis === 1 ? ' semitono' : ' semitonos') : 'un poco') + ' (suena ' + noteName(m) + octaveOf(m) + ')';
-      if (!flat) msg = '⚠ ' + msg + ': ¡no subas más!';
-      setText('status', msg);
-    }
+    // Solo símbolos: ✓ afinada · ▲ subir · ▼ bajar · doble flecha = lejos (con la nota a la que hay que llegar)
+    let msg;
+    if (st === 'ok') msg = '✓';
+    else if (ac >= 60) msg = (c < 0 ? '▲▲ ' : '▼▼ ') + noteName(target) + octaveOf(target);
+    else msg = c < 0 ? '▲' : '▼';
+    setText('status', msg);
     uiState = st + (fresh ? '' : ' hold');
     setState(uiState);
     markStrings(idx, st === 'ok');
     showTarget(idx);
+  }
+
+  // Elegir la octava de la lectura más coherente con las cuerdas de la afinación (no cambia el nombre de la nota)
+  function octavePrior(f) {
+    let best = f, bd = Infinity;
+    for (const k of [1, 0.5, 2]) {
+      const g = f * k;
+      for (const m of tuning.notes) {
+        const d = Math.abs(1200 * Math.log2(g / midiToFreq(m))) + (k === 1 ? 0 : 150);
+        if (d < bd) { bd = d; best = g; }
+      }
+    }
+    return best;
   }
 
   // Aguja con amortiguación tipo resorte (se mueve suave, sin temblar)
@@ -274,13 +279,16 @@
     const db = 20 * Math.log10(r.rms + 1e-9);
     $('level').style.width = clamp((db + 90) / 70 * 100, 0, 100) + '%';
 
-    const minClarity = SENS[sens];
-    const out = tracker.update(r, (ts - t0) / 1000, minClarity);
+    const minClarity = MIN_CLARITY;
+    const out = tracker.update(r, (ts - t0) / 1000, minClarity, tuning.notes.length ? octavePrior : null);
+    const gateDb = tracker.thresholdDb;
+    $('gateMark').style.left = clamp((gateDb + 90) / 70 * 100, 0, 100) + '%';
+    $('level').classList.toggle('open', tracker.gateOpen);
     if (out) { show(out.freq, out.fresh); lastFresh = out.fresh; }
     else if (uiState !== 'idle') idle('Toca una cuerda…');
 
     if (showDiag) {
-      setText('diag', 'entrada ' + db.toFixed(0) + ' dB · claridad ' + r.clarity.toFixed(2) + ' (mín ' + minClarity + ')' +
+      setText('diag', 'entrada ' + db.toFixed(0) + ' dB · fondo ' + tracker.floorDb.toFixed(0) + ' dB · puerta ' + (tracker.gateOpen ? 'abierta' : 'cerrada') + ' · claridad ' + r.clarity.toFixed(2) +
         ' · ' + (r.freq > 0 ? r.freq.toFixed(1) + ' Hz' : '—') + (out && out.fresh ? ' ✓' : '') + '\n' + micInfo);
     }
   }
@@ -292,7 +300,7 @@
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: false, noiseSuppression: false,
-          autoGainControl: true, // la ganancia automática sube la señal débil; no altera la afinación
+          autoGainControl: false, // ganancia fija: la puerta de ruido necesita niveles estables
           channelCount: 1,
         },
         video: false,
