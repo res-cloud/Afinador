@@ -176,15 +176,21 @@
 
   // ---------- Detección ----------
   let stream = null, source = null, analyser = null, chain = [], buf = null, detect = null, raf = 0, lastRun = 0, micInfo = '';
-  const tracker = window.Pitch.createTracker({
-    gateDb: 8, peakMargin: 5, cap: 18,
-    // Cambio de cuerda sin ataque claro: solo hacia una nota que sea una cuerda de la afinación
-    isString: (f) => !tuning.notes.length || tuning.notes.some(m => Math.abs(1200 * Math.log2(f / midiToFreq(m))) < 60),
+  // Afinador de guitarra: seguimiento estable + detección de cada púa nueva (suelta la cuerda anterior al instante)
+  const guitar = window.Pitch.createGuitar({
+    tracker: {
+      gateDb: 8, peakMargin: 5, cap: 18,
+      // Cambio de cuerda sin ataque claro: solo hacia una nota que sea una cuerda de la afinación
+      isString: (f) => !tuning.notes.length || tuning.notes.some(m => Math.abs(1200 * Math.log2(f / midiToFreq(m))) < 60),
+    },
+    strings: () => tuning.notes.map(midiToFreq),
+    locked: () => locked,
   });
+  const tracker = guitar.tracker;
   let rate = 48000;
   let lastKey = '', playedKey = '', displayIdx = -1, uiState = 'idle', needle = 0, needleV = 0, needleTarget = 0, lastFresh = 0, t0 = performance.now();
 
-  function resetTrack() { tracker.reset(); lastKey = ''; playedKey = ''; }
+  function resetTrack() { guitar.reset(); lastKey = ''; playedKey = ''; }
   const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
   const disp = $('display');
@@ -271,16 +277,21 @@
   const FOLD = [[1, 0], [1 / 2, 60], [1 / 3, 90], [1 / 4, 110], [2, 120]];
   function stringPrior(f) {
     const cand = locked >= 0 ? [tuning.notes[locked]] : tuning.notes;
-    let best = 0, bd = Infinity;
-    for (const [k, pen] of FOLD) {
-      const g = f * k;
-      for (const m of cand) {
-        const d = Math.abs(1200 * Math.log2(g / midiToFreq(m)));
-        const max = k === 1 ? (locked >= 0 ? 400 : Infinity) : 90; // armónico: debe caer a menos de ~1 semitono
-        if (d <= max && d + pen < bd) { bd = d + pen; best = g; }
+    // 1.ª pasada: armónicos a menos de ~1 semitono. 2.ª (si nada encaja): cuerda muy desafinada, hasta 1,5 semitonos.
+    // Una lectura a más de 3 semitonos de toda cuerda no es una cuerda: se descarta (no se muestra una nota absurda).
+    for (const hTol of [90, 150]) {
+      let best = 0, bd = Infinity;
+      for (const [k, pen] of FOLD) {
+        const g = f * k;
+        for (const m of cand) {
+          const d = Math.abs(1200 * Math.log2(g / midiToFreq(m)));
+          const max = k === 1 ? (locked >= 0 ? 400 : 300) : hTol;
+          if (d <= max && d + pen < bd) { bd = d + pen; best = g; }
+        }
       }
+      if (best) return best;
     }
-    return best;
+    return 0;
   }
 
   // Aguja con amortiguación tipo resorte (se mueve suave, sin temblar)
@@ -306,7 +317,7 @@
     $('level').style.width = clamp((db + 90) / 70 * 100, 0, 100) + '%';
 
     const minClarity = MIN_CLARITY;
-    const out = tracker.update(r, (ts - t0) / 1000, minClarity, tuning.notes.length ? stringPrior : null);
+    const out = guitar.update(r, (ts - t0) / 1000, minClarity, tuning.notes.length ? stringPrior : null);
     const gateDb = tracker.thresholdDb;
     $('gateMark').style.left = clamp((gateDb + 90) / 70 * 100, 0, 100) + '%';
     $('level').classList.toggle('open', tracker.gateOpen);
