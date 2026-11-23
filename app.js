@@ -89,7 +89,7 @@
   function renderStrings() {
     const box = $('strings');
     box.textContent = '';
-    $('stringTip').hidden = tuning.notes.length === 0;
+    $('stringTip').hidden = true;
     tuning.notes.forEach((m, i) => {
       const b = document.createElement('button');
       b.className = 'string';
@@ -107,8 +107,7 @@
     showTarget(locked);
   }
   function showTarget(idx) {
-    if (!tuning.notes.length) { $('target').textContent = 'Modo cromático'; return; }
-    if (idx < 0) { $('target').textContent = 'Toca cualquier cuerda'; return; }
+    if (!tuning.notes.length || idx < 0 || !showDiag) { $('target').textContent = ''; return; }
     const m = tuning.notes[idx];
     $('target').textContent = 'Objetivo: ' + noteName(m) + octaveOf(m) + ' · ' + (tuning.notes.length - idx) + 'ª cuerda · ' + midiToFreq(m).toFixed(1) + ' Hz' + (idx === locked ? ' · fijada' : '');
   }
@@ -139,7 +138,7 @@
   const MIN_CLARITY = 0.5;
   let showDiag = !!store.get('diag', false);
   function setA4(v) { a4 = clamp(v, 415, 466); $('a4').textContent = a4 + ' Hz'; store.set('a4', a4); showTarget(locked); }
-  function setDiag(v) { showDiag = v; store.set('diag', v); $('diagChk').checked = v; $('diag').hidden = !v; }
+  function setDiag(v) { showDiag = v; store.set('diag', v); $('diagChk').checked = v; $('diag').hidden = !v; document.querySelector('.level').hidden = !v; }
   setA4(a4); setDiag(showDiag);
   $('a4down').addEventListener('click', () => setA4(a4 - 1));
   $('a4up').addEventListener('click', () => setA4(a4 + 1));
@@ -230,7 +229,7 @@
     setText('note', noteName(played));
     setText('octave', String(octaveOf(played)));
     const cr = Math.round(c * 10) / 10 || 0;
-    setText('cents', (cr > 0 ? '+' : '') + cr.toFixed(1) + ' cents · ' + freq.toFixed(2) + ' Hz');
+    setText('cents', showDiag ? (cr > 0 ? '+' : '') + cr.toFixed(1) + ' cents · ' + freq.toFixed(2) + ' Hz' : (Math.round(c) > 0 ? '+' : '') + Math.round(c));
     needleTarget = clamp(c, -50, 50);
 
     const st = nextState(uiState, c);
@@ -246,14 +245,21 @@
     showTarget(idx);
   }
 
-  // Elegir la octava de la lectura más coherente con las cuerdas de la afinación (no cambia el nombre de la nota)
-  function octavePrior(f) {
-    let best = f, bd = Infinity;
-    for (const k of [1, 0.5, 2]) {
+  // Lectura pensada para guitarra: una cuerda de acero (sobre todo sin enchufar) a veces "suena" más en su
+  // 2º, 3º o 4º armónico que en la fundamental, y el detector puede dar ese armónico. Aquí cada lectura se
+  // lleva a la cuerda que de verdad está sonando: se prueba la frecuencia tal cual, sus divisiones (armónicos)
+  // y el doble (error de octava hacia abajo). Un armónico solo se acepta si cae casi exacto sobre una cuerda.
+  // Con una cuerda fijada, lo que no pueda ser esa cuerda (otra cuerda vibrando, ruido) se descarta.
+  const FOLD = [[1, 0], [1 / 2, 60], [1 / 3, 90], [1 / 4, 110], [2, 120]];
+  function stringPrior(f) {
+    const cand = locked >= 0 ? [tuning.notes[locked]] : tuning.notes;
+    let best = 0, bd = Infinity;
+    for (const [k, pen] of FOLD) {
       const g = f * k;
-      for (const m of tuning.notes) {
-        const d = Math.abs(1200 * Math.log2(g / midiToFreq(m))) + (k === 1 ? 0 : 150);
-        if (d < bd) { bd = d; best = g; }
+      for (const m of cand) {
+        const d = Math.abs(1200 * Math.log2(g / midiToFreq(m)));
+        const max = k === 1 ? (locked >= 0 ? 400 : Infinity) : 90; // armónico: debe caer a menos de ~1 semitono
+        if (d <= max && d + pen < bd) { bd = d + pen; best = g; }
       }
     }
     return best;
@@ -282,12 +288,12 @@
     $('level').style.width = clamp((db + 90) / 70 * 100, 0, 100) + '%';
 
     const minClarity = MIN_CLARITY;
-    const out = tracker.update(r, (ts - t0) / 1000, minClarity, tuning.notes.length ? octavePrior : null);
+    const out = tracker.update(r, (ts - t0) / 1000, minClarity, tuning.notes.length ? stringPrior : null);
     const gateDb = tracker.thresholdDb;
     $('gateMark').style.left = clamp((gateDb + 90) / 70 * 100, 0, 100) + '%';
     $('level').classList.toggle('open', tracker.gateOpen);
     if (out) { show(out.freq, out.fresh); lastFresh = out.fresh; }
-    else if (uiState !== 'idle') idle('Toca una cuerda…');
+    else if (uiState !== 'idle') idle('');
 
     if (showDiag) {
       setText('diag', 'entrada ' + db.toFixed(0) + ' dB · fondo ' + tracker.floorDb.toFixed(0) + ' dB · puerta ' + (tracker.gateOpen ? 'abierta' : 'cerrada') + ' · claridad ' + r.clarity.toFixed(2) +
@@ -334,7 +340,7 @@
     resetTrack();
     $('micBtn').textContent = 'Pausar micrófono';
     $('micBtn').classList.add('on');
-    idle('Toca una cuerda…');
+    idle('');
     keepAwake(true);
     raf = requestAnimationFrame(loop);
   }
