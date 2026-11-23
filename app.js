@@ -166,7 +166,8 @@
 
   // ---------- Detección ----------
   let stream = null, source = null, analyser = null, chain = [], buf = null, detect = null, raf = 0, lastRun = 0, micInfo = '';
-  const tracker = window.Pitch.createTracker({ gateDb: 8 });
+  const tracker = window.Pitch.createTracker({ gateDb: 8, peakMargin: 5, cap: 18 });
+  let rate = 48000;
   let lastKey = '', playedKey = '', displayIdx = -1, uiState = 'idle', needle = 0, needleV = 0, needleTarget = 0, lastFresh = 0, t0 = performance.now();
 
   function resetTrack() { tracker.reset(); lastKey = ''; playedKey = ''; }
@@ -276,7 +277,8 @@
     lastRun = ts;
     analyser.getFloatTimeDomainData(buf);
     const r = detect(buf);
-    const db = 20 * Math.log10(r.rms + 1e-9);
+    r.level = window.Pitch.bandLevel(buf, rate); // la puerta mira la banda media, donde suena la cuerda
+    const db = 20 * Math.log10(r.level + 1e-9);
     $('level').style.width = clamp((db + 90) / 70 * 100, 0, 100) + '%';
 
     const minClarity = MIN_CLARITY;
@@ -323,6 +325,7 @@
     source.connect(hp).connect(lp).connect(analyser); // no va a los altavoces; no se guarda nada
     chain = [hp, lp];
     buf = new Float32Array(analyser.fftSize);
+    rate = ac.sampleRate;
     detect = window.Pitch.createDetector(analyser.fftSize, ac.sampleRate, { minF: 30, maxF: 1500 });
     try {
       const s = trackSettings;

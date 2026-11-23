@@ -155,7 +155,7 @@
     function relock(arr, t) { lock = med(arr); buf = arr.map(f => ({ f, t })); cand = []; alt = []; newPluck = false; }
     // Umbral de apertura: por encima del ruido de fondo Y por encima de los picos del ambiente
     // (golpes de bajo de la música del vecino, carros…): solo abre una cuerda tocada cerca.
-    function threshold() { return Math.max(floorDb + o.gateDb, Math.min(peakDb + 5, floorDb + 18)); }
+    function threshold() { return Math.max(floorDb + o.gateDb, Math.min(peakDb + (o.peakMargin == null ? 3 : o.peakMargin), floorDb + (o.cap || 12))); }
     function pushFloor(db, id) {
       floorHist.push({ db, id: id || 0 }); if (floorHist.length > (o.hist || 200)) floorHist.shift();
       recalc();
@@ -175,7 +175,13 @@
       reset() { lock = 0; buf = []; cand = []; alt = []; lastAccept = -1e9; newPluck = false; floorHist = []; floorDb = -75; peakDb = -75; open = false; ev = null; recentDb.length = 0; },
       // r = { freq, clarity, rms }, t en segundos. Devuelve { freq, fresh } o null.
       update(r, t, minClarity, prior) {
-        const db = 20 * Math.log10(r.rms + 1e-9);
+        // Nivel para la puerta: si la app lo da, solo la banda de 250–2000 Hz con ventana corta.
+        // Ahí la cuerda tocada cerca sube ~20 dB; el retumbe de la sala y el bajo que atraviesa paredes casi no llegan.
+        const lv = r.level != null ? r.level : r.rms;
+        const db = 20 * Math.log10(lv + 1e-9);
+        // Una púa cerca del micrófono es brillante: en el ataque la banda media pesa casi tanto como todo el sonido.
+        // Un bajo lejano (o a través de la pared) es casi solo graves.
+        const bright = r.level == null || 20 * Math.log10((r.level + 1e-9) / (r.rms + 1e-9)) >= (o.minRel == null ? -10 : o.minRel);
         // ---- Puerta de ruido ----
         // Ataque (subida brusca respecto a los últimos fotogramas)
         const prevMin = recentDb.length ? Math.min(...recentDb) : db;
@@ -185,7 +191,7 @@
         // Los primeros ~0,3 s solo se mide el ambiente
         if (floorHist.length < 10 && !ev) { pushFloor(db); open = false; if (attack) ev = { id: ++evId, start: t, peak: db, f: [] }; }
         else if (!open) {
-          if (db > threshold()) { open = true; openSince = t; lastOnset = t; newPluck = true; cand = []; ev = null; }
+          if (db > threshold() && bright) { open = true; openSince = t; lastOnset = t; newPluck = true; cand = []; ev = null; }
           else {
             // Vía lenta: una cuerda tocada suave (por debajo del umbral) se reconoce porque, tras su ataque,
             // mantiene la MISMA nota y se va apagando poco a poco. La música cambia de nota; el ruido no tiene nota.
@@ -194,7 +200,7 @@
               ev.peak = Math.max(ev.peak, db);
               if (t - ev.start > o.attack && r.freq > 0 && r.clarity >= minClarity) ev.f.push(r.freq);
               const fs = ev.f.slice(-16);
-              if (t - ev.start >= 0.6 && fs.length >= 12) {
+              if (t - ev.start >= (o.slowT || 0.6) && fs.length >= (o.slowN || 12)) {
                 const m = med(fs);
                 const stable = fs.filter(f => Math.abs(c(f, m)) < 25).length >= fs.length - 2;
                 const decaying = db < ev.peak - 1.5;
@@ -215,8 +221,8 @@
         }
         if (o.gateDb <= 0) open = true;
         // Nuevo ataque con la puerta ya abierta (cuerda tras cuerda)
-        if (open && r.rms > env * 1.6 && env > 0 && t - lastOnset > 0.2) { lastOnset = t; newPluck = true; cand = []; }
-        env = env * 0.6 + r.rms * 0.4;
+        if (open && lv > env * (o.onsetRatio || 1.6) && env > 0 && t - lastOnset > 0.2) { lastOnset = t; newPluck = true; cand = []; }
+        env = env * 0.6 + lv * 0.4;
 
         const inAttack = t - lastOnset < o.attack;
         // Solo se usan lecturas con la cuerda claramente por encima del fondo (si no, el fondo contamina la medida)
@@ -248,5 +254,22 @@
     };
   }
 
-  root.Pitch = { createDetector, createTracker };
+  // Nivel (RMS) de la banda 250–2000 Hz en los últimos ~43 ms: dos pasa-altos de 250 Hz sobre el final del bloque.
+  function bandLevel(x, sr, len) {
+    len = len || 2048; const pre = 512, s0 = Math.max(0, x.length - len - pre);
+    const w = 2 * Math.PI * 250 / sr, al = Math.sin(w) / (2 * 0.7), c = Math.cos(w);
+    const a0 = 1 + al, b0 = (1 + c) / 2 / a0, b1 = -(1 + c) / a0, b2 = b0, a1 = -2 * c / a0, a2 = (1 - al) / a0;
+    let p = 0, n = 0; const st = [0, 0, 0, 0, 0, 0, 0, 0];
+    for (let i = s0; i < x.length; i++) {
+      let v = x[i];
+      for (let k = 0; k < 2; k++) {
+        const j = k * 4, y = b0 * v + b1 * st[j] + b2 * st[j + 1] - a1 * st[j + 2] - a2 * st[j + 3];
+        st[j + 1] = st[j]; st[j] = v; st[j + 3] = st[j + 2]; st[j + 2] = y; v = y;
+      }
+      if (i >= x.length - len) { p += v * v; n++; }
+    }
+    return Math.sqrt(p / Math.max(1, n));
+  }
+
+  root.Pitch = { createDetector, createTracker, bandLevel };
 })(typeof self !== 'undefined' ? self : globalThis);
