@@ -248,7 +248,7 @@
     const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
     let lock = 0, buf = [], cand = [], alt = [], far = [], farT = 0, prevLock = 0, lastAccept = -1e9, lastOnset = -1e9, env = 0, newPluck = false;
     let floorHist = [], floorDb = -75, peakDb = -75, open = false, openSince = 0;
-    let lastDb = -75, softOpen = false, earlyLock = false, expectF = 0, ev = null, evId = 0, t0 = -1, lastT = -1, dtE = 0.03; const recentDb = [];
+    let lastDb = -75, susRef = 0, softOpen = false, earlyLock = false, expectF = 0, ev = null, evId = 0, t0 = -1, lastT = -1, dtE = 0.03; const recentDb = [];
     // Cuántas lecturas equivalen a 'sec' segundos (el teléfono puede procesar a otro ritmo)
     const nFor = (sec) => Math.max(3, Math.round(sec / dtE));
 
@@ -349,10 +349,18 @@
         const strong = o.gateDb <= 0 || db > floorDb + (softOpen ? 1 : o.gateDb - (o.strongDrop || 3));
         let f = (open && strong && !inAttack && r.freq > 0 && r.clarity >= minClarity) ? r.freq : 0;
         // Púa ya identificada (se sabe qué cuerda es): si la lectura cae en esa cuerda, sirve desde ya (respuesta rápida)
-        let fast = false;
+        let fast = false, sus = false;
         if (!f && inAttack && expectF && open && strong && bright && floorHist.length >= nFor(1.5) && r.freq > 0 && r.clarity >= 0.8) {
           const g = prior ? prior(r.freq, lock) : r.freq;
           if (g && Math.abs(c(g, expectF)) < 60) { f = r.freq; fast = true; }
+        }
+        // La cuerda fijada se sigue midiendo mientras se apaga (aunque ya esté cerca del fondo o la puerta se haya
+        // cerrado): solo lecturas claras y en la MISMA nota, así la afinación no se "corta" mientras suena.
+        if (!f && lock && !newPluck && !inAttack && !globalThis.NOSUS && r.freq > 0 && r.clarity >= (o.sustainClarity || 0.7) &&
+            db > floorDb + (o.sustainDb == null ? 1.5 : o.sustainDb) && t - lastAccept < 0.6) {
+          const g = prior ? prior(r.freq, lock) : r.freq;
+          // (respecto a la nota medida con la cuerda fuerte: así no se va "arrastrando" hacia otra nota)
+          if (g && Math.abs(c(g, lock)) <= 25 && susRef && Math.abs(c(g, susRef)) <= 20) { f = r.freq; sus = true; }
         }
         // Dos cuerdas a la vez: si una de ellas es la que ya se mostraba, la otra es la que acabas de tocar
         if (f && r.cands && lock) {
@@ -401,6 +409,7 @@
             if (far.length === need && Math.abs(c(Math.max(...far), Math.min(...far))) < 25) { relock(far, t); far = []; }
           }
           lastAccept = t;
+          if (!sus) susRef = lock;
         }
         if (t - lastAccept > o.keep) { lock = 0; buf = []; }
         return lock ? { freq: lock, fresh: t - lastAccept < 0.5 } : null;
@@ -563,7 +572,7 @@
           }
           // Púa dudosa que señala una cuerda grave cuyo armónico es justo la cuerda que sigue sonando clara:
           // suele ser un golpe o ruido sobre esa cuerda, no una púa nueva. Se ignora.
-          if (L < 0 && on.idx >= 0 && on.score < 12) {
+          if (L < 0 && on.idx >= 0 && on.score < 11) {
             const lf = tracker.lockFreq, k = lf > 0 ? Math.round(lf / S[on.idx]) : 0, fr = r.freq > 0 ? (prior ? prior(r.freq) || r.freq : r.freq) : 0;
             if (k >= 2 && k <= 4 && Math.abs(c(S[on.idx] * k, lf)) < 40 && fr && Math.abs(c(fr, lf)) < 40 && r.clarity >= 0.8) { on.idx = -1; on.score = null; }
           }

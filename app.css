@@ -110,7 +110,7 @@ optgroup { color: var(--muted); }
 .display.near .note { color: var(--amber); }
 .display.ok .note { color: var(--accent); text-shadow: 0 0 28px rgba(62,230,168,.45); }
 .display.idle .note { color: var(--panel3); }
-.display.hold .note { opacity: .55; }
+.display.hold .note { opacity: .8; }
 
 .readout { position: relative; display: flex; align-items: baseline; justify-content: center; gap: 10px; min-height: 34px; margin-top: 2px; }
 .status { font-size: 24px; font-weight: 800; letter-spacing: 1px; line-height: 32px; }
